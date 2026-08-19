@@ -3,9 +3,10 @@
 # sanity-check.sh
 # Verifies the vm-stack environment:
 # 1. Ensures ~/.config/vm-stack/ directory exists.
-# 2. Detects QEMU installation and target emulator binaries.
-# 3. Verifies virtualization acceleration (KVM, HVF).
-# 4. Provides an interactive multi-stage wizard for privileged operations.
+# 2. Ensures ~/.config/vm-stack/preferences.json exists conforming to schema.
+# 3. Detects QEMU installation and target emulator binaries.
+# 4. Verifies virtualization acceleration (KVM, HVF).
+# 5. Provides an interactive multi-stage wizard for privileged operations.
 # ==============================================================================
 
 set -euo pipefail
@@ -56,6 +57,7 @@ Usage: sanity-check.sh [OPTIONS]
 
 Sanity checks the vm-stack environment:
 - Ensures ~/.config/vm-stack/ exists
+- Ensures ~/.config/vm-stack/preferences.json exists (cache_os_images, defaults)
 - Verifies and installs QEMU across macOS and Linux
 - Verifies virtualization acceleration (KVM / HVF)
 - Provides an interactive setup wizard for privileged operations
@@ -71,7 +73,7 @@ Options:
   -h, --help           Show this help message
 
 Exit codes:
-  0 - Environment and QEMU are ready
+  0 - Environment, preferences, and QEMU are ready
   1 - Installation failed or unsupported system
   2 - QEMU is missing (in --check mode)
   3 - Privilege escalation required (run with --wizard in an interactive terminal)
@@ -130,14 +132,18 @@ done
 export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # ──────────────────────────────────────────────────────────────────────────
-# Configuration Directory Initialization (~/.config/vm-stack/)
+# Configuration & Preferences Initialization (~/.config/vm-stack/)
 # ──────────────────────────────────────────────────────────────────────────
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vm-stack"
+PREFERENCES_FILE="$CONFIG_DIR/preferences.json"
 CONFIG_DIR_READY=0
 CONFIG_DIR_CREATED=0
+PREFERENCES_READY=0
+PREFERENCES_CREATED=0
+CACHE_OS_IMAGES="true"
 
-ensure_config_dir() {
+ensure_config_and_preferences() {
   if [[ -d "$CONFIG_DIR" ]]; then
     CONFIG_DIR_READY=1
   else
@@ -150,9 +156,39 @@ ensure_config_dir() {
       log_debug "Could not create configuration directory: $CONFIG_DIR"
     fi
   fi
+
+  if [[ -f "$PREFERENCES_FILE" ]]; then
+    PREFERENCES_READY=1
+    # Read cache_os_images value if available
+    if command -v python3 >/dev/null 2>&1; then
+      CACHE_OS_IMAGES="$(python3 -c 'import json, sys; d=json.load(open(sys.argv[1])); print("true" if d.get("cache_os_images", True) else "false")' "$PREFERENCES_FILE" 2>/dev/null || echo "true")"
+    fi
+  else
+    if [[ "$CONFIG_DIR_READY" -eq 1 ]]; then
+      local default_prefs
+      default_prefs=$(cat << 'EOF'
+{
+  "version": 1,
+  "cache_os_images": true,
+  "default_arch": "auto",
+  "default_memory": "4G",
+  "default_cpus": 2,
+  "default_accel": "auto",
+  "images_dir": "",
+  "cache_dir": ""
+}
+EOF
+)
+      if printf '%s\n' "$default_prefs" > "$PREFERENCES_FILE" 2>/dev/null; then
+        PREFERENCES_READY=1
+        PREFERENCES_CREATED=1
+        log_debug "Created default preferences file: $PREFERENCES_FILE"
+      fi
+    fi
+  fi
 }
 
-ensure_config_dir
+ensure_config_and_preferences
 
 # ──────────────────────────────────────────────────────────────────────────
 # Detection Routines
@@ -383,7 +419,7 @@ banner() {
   printf '\n%s%s  %s%s\n' "$BOLD" "$BLUE" "$1" "$RESET"
   printf '%s  %s stage(s)%s\n\n' "$DIM" "$TOTAL_STAGES" "$RESET"
   printf '%s  This setup wizard walks you through verifying the vm-stack environment,\n' "$DIM"
-  printf '  installing QEMU, and configuring virtualization acceleration.\n'
+  printf '  configuration preferences, QEMU installation, and virtualization acceleration.\n'
   printf '  Privileged steps will prompt for confirmation before execution.%s\n\n' "$RESET"
   pause "Press Enter to start..."
 }
@@ -433,11 +469,12 @@ finish() {
   fi
 
   # Final status summary
-  printf '  %sConfig Directory:%s %s (%s)\n' "$BOLD" "$RESET" "$CONFIG_DIR" "$([[ "$CONFIG_DIR_READY" -eq 1 ]] && echo "Ready" || echo "Not created")"
-  printf '  %sHost OS:%s %s (%s)\n' "$BOLD" "$RESET" "$OS_TYPE" "$DISTRO"
-  printf '  %sQEMU Installed:%s %s\n' "$BOLD" "$RESET" "$([[ "$QEMU_INSTALLED" -eq 1 ]] && echo "Yes (v$QEMU_VERSION)" || echo "No")"
-  printf '  %sTarget Emulator:%s %s\n' "$BOLD" "$RESET" "$(command -v "qemu-system-$TARGET_ARCH" 2>/dev/null || echo "Not found")"
-  printf '  %sHardware Acceleration:%s %s\n\n' "$BOLD" "$RESET" "$ACCEL_DETAILS"
+  printf '  %sConfig Directory:%s  %s (%s)\n' "$BOLD" "$RESET" "$CONFIG_DIR" "$([[ "$CONFIG_DIR_READY" -eq 1 ]] && echo "Ready" || echo "Not created")"
+  printf '  %sPreferences File:%s  %s (%s)\n' "$BOLD" "$RESET" "$PREFERENCES_FILE" "$([[ "$PREFERENCES_READY" -eq 1 ]] && echo "Ready" || echo "Not created")"
+  printf '  %sHost OS:%s           %s (%s)\n' "$BOLD" "$RESET" "$OS_TYPE" "$DISTRO"
+  printf '  %sQEMU Installed:%s    %s\n' "$BOLD" "$RESET" "$([[ "$QEMU_INSTALLED" -eq 1 ]] && echo "Yes (v$QEMU_VERSION)" || echo "No")"
+  printf '  %sTarget Emulator:%s   %s\n' "$BOLD" "$RESET" "$(command -v "qemu-system-$TARGET_ARCH" 2>/dev/null || echo "Not found")"
+  printf '  %sAcceleration:%s      %s\n\n' "$BOLD" "$RESET" "$ACCEL_DETAILS"
 }
 
 get_install_command() {
@@ -458,9 +495,12 @@ get_install_command() {
 }
 
 run_wizard() {
-  ensure_config_dir
+  ensure_config_and_preferences
   if [[ "$CONFIG_DIR_READY" -eq 1 ]]; then
     ACTIONS_PERFORMED+=("Initialized configuration directory ($CONFIG_DIR)")
+  fi
+  if [[ "$PREFERENCES_READY" -eq 1 ]]; then
+    ACTIONS_PERFORMED+=("Initialized preferences ($PREFERENCES_FILE)")
   fi
 
   # Recalculate states
@@ -660,11 +700,18 @@ output_json() {
   [[ "$PRIVILEGE_REQUIRED" -eq 1 ]] && priv_req_bool="true"
   local cfg_ready_bool="false"
   [[ "$CONFIG_DIR_READY" -eq 1 ]] && cfg_ready_bool="true"
+  local pref_ready_bool="false"
+  [[ "$PREFERENCES_READY" -eq 1 ]] && pref_ready_bool="true"
 
   cat << EOF
 {
   "config_dir": "$CONFIG_DIR",
   "config_dir_ready": $cfg_ready_bool,
+  "preferences_file": "$PREFERENCES_FILE",
+  "preferences_ready": $pref_ready_bool,
+  "preferences": {
+    "cache_os_images": $CACHE_OS_IMAGES
+  },
   "installed": $inst_bool,
   "target_arch": "$TARGET_ARCH",
   "version": "$QEMU_VERSION",
@@ -688,6 +735,7 @@ EOF
 
 output_text() {
   log_info "Config directory: $CONFIG_DIR ($([[ "$CONFIG_DIR_READY" -eq 1 ]] && echo "ready" || echo "uninitialized"))"
+  log_info "Preferences: $PREFERENCES_FILE (cache_os_images: $CACHE_OS_IMAGES)"
   if [[ "$QEMU_INSTALLED" -eq 1 ]]; then
     log_info "QEMU is installed (Version: ${QEMU_VERSION:-detected})."
     log_info "Target binary: $(command -v "qemu-system-$TARGET_ARCH" 2>/dev/null || command -v qemu-img 2>/dev/null || echo "Available")"

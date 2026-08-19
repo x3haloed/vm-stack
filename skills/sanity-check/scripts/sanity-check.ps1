@@ -2,9 +2,10 @@
 .SYNOPSIS
     Sanity checks the vm-stack environment on Windows:
     1. Ensures ~/.config/vm-stack/ directory exists.
-    2. Detects QEMU installation and target emulator binaries.
-    3. Verifies Windows Hypervisor Platform (WHPX) acceleration.
-    4. Provides an interactive multi-stage wizard for privileged operations.
+    2. Ensures ~/.config/vm-stack/preferences.json exists with defaults (cache_os_images).
+    3. Detects QEMU installation and target emulator binaries.
+    4. Verifies Windows Hypervisor Platform (WHPX) acceleration.
+    5. Provides an interactive multi-stage wizard for privileged operations.
 .DESCRIPTION
     Zero external dependencies (pure PowerShell). Supports WinGet, Chocolatey, Scoop, and direct installer download.
     Includes an interactive multi-stage setup wizard for steps requiring elevated (Administrator) privileges.
@@ -68,7 +69,7 @@ function Write-ErrorLog([string]$message) {
 }
 
 # ──────────────────────────────────────────────────────────────────────────
-# Configuration Directory (~/.config/vm-stack/ or Windows equivalent)
+# Configuration Directory & Preferences (~/.config/vm-stack/preferences.json)
 # ──────────────────────────────────────────────────────────────────────────
 
 $ConfigDir = if ($env:XDG_CONFIG_HOME) {
@@ -79,8 +80,44 @@ $ConfigDir = if ($env:XDG_CONFIG_HOME) {
     Join-Path $env:APPDATA "vm-stack"
 }
 
-if (-not (Test-Path $ConfigDir)) {
-    New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
+$ConfigDirReady = $false
+try {
+    if (-not (Test-Path $ConfigDir)) {
+        New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
+    }
+    $ConfigDirReady = (Test-Path $ConfigDir)
+} catch {
+    $ConfigDirReady = $false
+}
+
+$PreferencesFile = Join-Path $ConfigDir "preferences.json"
+$PreferencesReady = $false
+$CacheOsImages = $true
+
+if ($ConfigDirReady) {
+    try {
+        if (-not (Test-Path $PreferencesFile)) {
+            $defaultPrefs = @{
+                version         = 1
+                cache_os_images = $true
+                default_arch    = "auto"
+                default_memory  = "4G"
+                default_cpus    = 2
+                default_accel   = "auto"
+                images_dir      = ""
+                cache_dir       = ""
+            } | ConvertTo-Json -Depth 4
+            Set-Content -Path $PreferencesFile -Value $defaultPrefs -Encoding UTF8
+        }
+        $PreferencesReady = $true
+
+        $loadedPrefs = Get-Content $PreferencesFile -Raw | ConvertFrom-Json
+        if ($null -ne $loadedPrefs.cache_os_images) {
+            $CacheOsImages = [bool]$loadedPrefs.cache_os_images
+        }
+    } catch {
+        $PreferencesReady = $false
+    }
 }
 
 # Standard installation paths for QEMU on Windows
@@ -238,7 +275,7 @@ function Show-Banner([string]$title) {
     Write-Host "  $Global:TotalStages stage(s)" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  This setup wizard walks you through verifying the vm-stack environment," -ForegroundColor DarkGray
-    Write-Host "  installing QEMU, and configuring Windows Hypervisor Platform (WHPX)." -ForegroundColor DarkGray
+    Write-Host "  preferences, installing QEMU, and configuring WHPX acceleration." -ForegroundColor DarkGray
     Write-Host "  Privileged steps will prompt for confirmation before execution." -ForegroundColor DarkGray
     Write-Host ""
     Pause-Prompt "Press Enter to start..."
@@ -291,11 +328,12 @@ function Show-Summary {
         Write-Host ""
     }
 
-    Write-Host "  Config Directory: $ConfigDir"
-    Write-Host "  Host OS: Windows"
-    Write-Host "  QEMU Installed: $(if ($IsInstalled) { "Yes (v$Version)" } else { "No" })"
-    Write-Host "  Target Emulator: $(if ($FoundBinaries.ContainsKey($ReqBinary)) { $FoundBinaries[$ReqBinary] } else { "Not found" })"
-    Write-Host "  Hardware Acceleration: $AccelDetails"
+    Write-Host "  Config Directory:  $ConfigDir"
+    Write-Host "  Preferences File:  $PreferencesFile"
+    Write-Host "  Host OS:           Windows"
+    Write-Host "  QEMU Installed:    $(if ($IsInstalled) { "Yes (v$Version)" } else { "No" })"
+    Write-Host "  Target Emulator:   $(if ($FoundBinaries.ContainsKey($ReqBinary)) { $FoundBinaries[$ReqBinary] } else { "Not found" })"
+    Write-Host "  Acceleration:      $AccelDetails"
     Write-Host ""
 }
 
@@ -343,7 +381,8 @@ function Install-QemuWindows {
 }
 
 function Run-Wizard {
-    $Global:ActionsDone.Add("Initialized config directory: $ConfigDir")
+    $Global:ActionsDone.Add("Initialized configuration directory: $ConfigDir")
+    $Global:ActionsDone.Add("Initialized preferences file: $PreferencesFile")
 
     Check-QemuStatus
     Check-AccelerationStatus
@@ -488,18 +527,23 @@ if ($Wizard) {
 if ($Check) {
     if ($Json) {
         [PSCustomObject]@{
-            config_dir         = $ConfigDir
-            config_dir_ready   = $true
-            installed          = $IsInstalled
-            target_arch        = $Target
-            version            = $Version
-            os                 = "windows"
-            package_managers   = $AvailablePkgMgrs
-            privilege_required = $PrivilegeRequired
-            wizard_recommended = $PrivilegeRequired
-            wizard_command     = "powershell -ExecutionPolicy Bypass -File .\scripts\sanity-check.ps1 -Wizard"
-            binaries           = $FoundBinaries
-            acceleration       = @{
+            config_dir          = $ConfigDir
+            config_dir_ready    = $ConfigDirReady
+            preferences_file    = $PreferencesFile
+            preferences_ready   = $PreferencesReady
+            preferences         = @{
+                cache_os_images = $CacheOsImages
+            }
+            installed           = $IsInstalled
+            target_arch         = $Target
+            version             = $Version
+            os                  = "windows"
+            package_managers    = $AvailablePkgMgrs
+            privilege_required  = $PrivilegeRequired
+            wizard_recommended  = $PrivilegeRequired
+            wizard_command      = "powershell -ExecutionPolicy Bypass -File .\scripts\sanity-check.ps1 -Wizard"
+            binaries            = $FoundBinaries
+            acceleration        = @{
                 type       = $AccelType
                 supported  = $AccelSupported
                 accessible = $AccelAccessible
@@ -507,7 +551,8 @@ if ($Check) {
             }
         } | ConvertTo-Json -Depth 4
     } else {
-        Write-InfoLog "Config directory: $ConfigDir (ready)"
+        Write-InfoLog "Config directory: $ConfigDir ($([string](if ($ConfigDirReady) { "ready" } else { "uninitialized" })))"
+        Write-InfoLog "Preferences: $PreferencesFile (cache_os_images: $CacheOsImages)"
         if ($IsInstalled) {
             Write-InfoLog "QEMU is installed (Version: $Version)."
             Write-InfoLog "Target binary: $($FoundBinaries[$ReqBinary])"
@@ -553,18 +598,23 @@ if (-not $IsInstalled) {
 
 if ($Json) {
     [PSCustomObject]@{
-        config_dir         = $ConfigDir
-        config_dir_ready   = $true
-        installed          = $IsInstalled
-        target_arch        = $Target
-        version            = $Version
-        os                 = "windows"
-        package_managers   = $AvailablePkgMgrs
-        privilege_required = $PrivilegeRequired
-        wizard_recommended = $PrivilegeRequired
-        wizard_command     = "powershell -ExecutionPolicy Bypass -File .\scripts\sanity-check.ps1 -Wizard"
-        binaries           = $FoundBinaries
-        acceleration       = @{
+        config_dir          = $ConfigDir
+        config_dir_ready    = $ConfigDirReady
+        preferences_file    = $PreferencesFile
+        preferences_ready   = $PreferencesReady
+        preferences         = @{
+            cache_os_images = $CacheOsImages
+        }
+        installed           = $IsInstalled
+        target_arch         = $Target
+        version             = $Version
+        os                  = "windows"
+        package_managers    = $AvailablePkgMgrs
+        privilege_required  = $PrivilegeRequired
+        wizard_recommended  = $PrivilegeRequired
+        wizard_command      = "powershell -ExecutionPolicy Bypass -File .\scripts\sanity-check.ps1 -Wizard"
+        binaries            = $FoundBinaries
+        acceleration        = @{
             type       = $AccelType
             supported  = $AccelSupported
             accessible = $AccelAccessible

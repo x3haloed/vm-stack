@@ -1,11 +1,41 @@
 ---
 name: sanity-check
-description: Use when verifying the local vm-stack environment, ensuring ~/.config/vm-stack/ exists, detecting or installing QEMU (including qemu-img, qemu-system-x86_64, qemu-system-aarch64), and checking virtualization acceleration (KVM, HVF, WHPX) across macOS, Linux distributions, and Windows.
+description: Use when verifying the local vm-stack environment, ensuring ~/.config/vm-stack/ and preferences.json exist, detecting or installing QEMU (including qemu-img, qemu-system-x86_64, qemu-system-aarch64), and checking virtualization acceleration (KVM, HVF, WHPX) across macOS, Linux distributions, and Windows.
 ---
 
 # Sanity Check
 
-Verifies the host environment for `vm-stack`, ensures the configuration directory `~/.config/vm-stack/` exists, detects QEMU and its virtualization utilities, checks hardware acceleration capabilities (KVM, HVF, WHPX), and provides automated verification alongside an interactive multi-stage setup wizard for operations requiring elevated privileges.
+Verifies the host environment for `vm-stack`, ensures the configuration directory `~/.config/vm-stack/` and preferences file `~/.config/vm-stack/preferences.json` exist, detects QEMU and its virtualization utilities, checks hardware acceleration capabilities (KVM, HVF, WHPX), and provides automated verification alongside an interactive multi-stage setup wizard for operations requiring elevated privileges.
+
+Schema definition: [schemas/preferences.schema.json](file:///Users/chad/Repos/vm-stack/schemas/preferences.schema.json)
+
+---
+
+## Preferences Configuration (`~/.config/vm-stack/preferences.json`)
+
+The sanity-check routine automatically initializes `~/.config/vm-stack/preferences.json` (or platform equivalent) conforming to the bundled schema:
+
+```json
+{
+  "version": 1,
+  "cache_os_images": true,
+  "default_arch": "auto",
+  "default_memory": "4G",
+  "default_cpus": 2,
+  "default_accel": "auto",
+  "images_dir": "",
+  "cache_dir": ""
+}
+```
+
+### Key Preference Fields:
+- **`cache_os_images`** *(boolean, default: `true`)*: Whether to cache downloaded base cloud/OS images locally in `~/.config/vm-stack/cache/` for fast VM provisioning.
+- **`default_arch`** *(string, default: `"auto"`)*: Preferred target architecture (`aarch64`, `x86_64`, or `auto`).
+- **`default_memory`** *(string, default: `"4G"`)*: Default RAM allocation for newly provisioned VMs.
+- **`default_cpus`** *(integer, default: `2`)*: Default virtual CPU core count.
+- **`default_accel`** *(string, default: `"auto"`)*: Default acceleration framework (`hvf` on macOS, `kvm` on Linux, `whpx` on Windows).
+- **`images_dir`** *(string)*: Custom override path for VM disk images (defaults to `~/.config/vm-stack/images/`).
+- **`cache_dir`** *(string)*: Custom override path for cached OS images (defaults to `~/.config/vm-stack/cache/`).
 
 ---
 
@@ -17,7 +47,9 @@ When preparing an environment for VM workloads, follow this deterministic decisi
                       +──────────────────────────+
                       |   Run Sanity Check       |
                       | sanity-check.sh --check  |
-                      | Ensures ~/.config/vm-stack/
+                      | Ensures:                 |
+                      |  - ~/.config/vm-stack/   |
+                      |  - preferences.json      |
                       +─────────────┬────────────+
                                     │
                          Is QEMU installed and
@@ -45,19 +77,22 @@ When preparing an environment for VM workloads, follow this deterministic decisi
 ```
 
 ### 1. Step 1: Discover Environment & Status (Non-Interactive)
-Run the check script with `--json` (or `--check`) to inspect host capabilities and initialize `~/.config/vm-stack/` without making intrusive system changes:
+Run the check script with `--json` (or `--check`) to inspect host capabilities and initialize configuration without making intrusive system changes:
 
 ```bash
 # macOS / Linux
-./scripts/sanity-check.sh --check --json
+./skills/sanity-check/scripts/sanity-check.sh --check --json
 
 # Windows (PowerShell)
-.\scripts\sanity-check.ps1 -Check -Json
+.\skills\sanity-check\scripts\sanity-check.ps1 -Check -Json
 ```
 
 Inspect the returned JSON object:
-- `config_dir`: Path to `~/.config/vm-stack/` (or platform equivalent)
+- `config_dir`: Path to `~/.config/vm-stack/`
 - `config_dir_ready`: `true`
+- `preferences_file`: Path to `~/.config/vm-stack/preferences.json`
+- `preferences_ready`: `true`
+- `preferences.cache_os_images`: `true` / `false`
 - `installed`: `true` / `false`
 - `privilege_required`: `true` / `false`
 - `acceleration.accessible`: `true` / `false`
@@ -88,28 +123,14 @@ Launch the wizard in the user's terminal:
 
 ```bash
 # macOS / Linux
-./scripts/sanity-check.sh --wizard
+./skills/sanity-check/scripts/sanity-check.sh --wizard
 # or shortcut:
-./scripts/qemu-wizard.sh
+./skills/sanity-check/scripts/qemu-wizard.sh
 
 # Windows (PowerShell)
-.\scripts\sanity-check.ps1 -Wizard
+.\skills\sanity-check\scripts\sanity-check.ps1 -Wizard
 # or shortcut:
-.\scripts\qemu-wizard.ps1
-```
-
-#### Wizard Journey & Stages:
-1. **Stage 1: Package Installation**: Identifies the host distribution, displays the exact package command, requests confirmation, and executes elevated installation with real-time feedback.
-2. **Stage 2: Hardware Acceleration Configuration**:
-   - On Linux: Checks `/dev/kvm` presence, loads kernel modules (`kvm`, `kvm_intel`, `kvm_amd`), and configures `kvm` user group membership.
-   - On Windows: Checks and enables Windows Hypervisor Platform (`HypervisorPlatform`).
-3. **Stage 3: Smoke Test & PATH Verification**: Creates a temporary test disk with `qemu-img`, verifies target emulator execution (`qemu-system-<arch>`), and displays a closing summary frame.
-
-### 4. Step 4: Final Verification
-Re-run the status check to ensure everything is operational:
-
-```bash
-./scripts/sanity-check.sh --check
+.\skills\sanity-check\scripts\qemu-wizard.ps1
 ```
 
 ---
@@ -118,80 +139,32 @@ Re-run the status check to ensure everything is operational:
 
 ### macOS & Linux (`sanity-check.sh` / `qemu-wizard.sh`)
 ```bash
-# Status check & config directory initialization (Exit 0=ready, 2=missing)
-./scripts/sanity-check.sh --check
+# Status check & preferences initialization (Exit 0=ready, 2=missing)
+./skills/sanity-check/scripts/sanity-check.sh --check
 
 # Machine-readable JSON output
-./scripts/sanity-check.sh --check --json
+./skills/sanity-check/scripts/sanity-check.sh --check --json
 
 # Target a specific architecture (e.g. aarch64, arm, x86_64)
-./scripts/sanity-check.sh --check --target aarch64
+./skills/sanity-check/scripts/sanity-check.sh --check --target aarch64
 
 # Launch interactive multi-stage wizard
-./scripts/sanity-check.sh --wizard
-./scripts/qemu-wizard.sh
+./skills/sanity-check/scripts/sanity-check.sh --wizard
+./skills/sanity-check/scripts/qemu-wizard.sh
 ```
 
 ### Windows (`sanity-check.ps1` / `qemu-wizard.ps1`)
 ```powershell
-# Status check & config directory initialization
-.\scripts\sanity-check.ps1 -Check
+# Status check & preferences initialization
+.\skills\sanity-check\scripts\sanity-check.ps1 -Check
 
 # JSON output
-.\scripts\sanity-check.ps1 -Check -Json
+.\skills\sanity-check\scripts\sanity-check.ps1 -Check -Json
 
 # Target a specific architecture
-.\scripts\sanity-check.ps1 -Check -Target aarch64
+.\skills\sanity-check\scripts\sanity-check.ps1 -Check -Target aarch64
 
 # Launch interactive wizard
-.\scripts\sanity-check.ps1 -Wizard
-.\scripts\qemu-wizard.ps1
-```
-
----
-
-## Installation Reference Matrix
-
-| Platform / Distro | Package Manager | Privileges Required | Key Packages |
-| :--- | :--- | :--- | :--- |
-| **macOS** | Homebrew | User | `qemu` |
-| **macOS** | MacPorts | Root (`sudo`) | `qemu` |
-| **Debian / Ubuntu / Mint** | APT | Root (`sudo`) | `qemu-system`, `qemu-utils` |
-| **Fedora / RHEL / Rocky** | DNF / YUM | Root (`sudo`) | `qemu-system-x86`, `qemu-system-aarch64`, `qemu-img` |
-| **Arch Linux / Manjaro** | Pacman | Root (`sudo`) | `qemu-full` (or `qemu-desktop`) |
-| **Alpine Linux** | APK | Root (`sudo`) | `qemu-system-x86_64`, `qemu-system-aarch64`, `qemu-img` |
-| **openSUSE** | Zypper | Root (`sudo`) | `qemu-x86`, `qemu-arm`, `qemu-tools` |
-| **Gentoo** | Portage | Root (`sudo`) | `app-emulation/qemu` |
-| **Void Linux** | XBPS | Root (`sudo`) | `qemu` |
-| **Nix** | Nixpkgs | User | `nixpkgs.qemu` |
-| **Windows** | Scoop | User | `qemu` |
-| **Windows** | WinGet / Choco / Direct | Administrator | QEMU for Windows |
-
----
-
-## Hardware Acceleration Reference
-
-| Host OS | Acceleration Type | QEMU Flags | Verification Check | Configuration / Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| **Linux** | KVM | `-accel kvm` or `-enable-kvm` | `test -r /dev/kvm && test -w /dev/kvm` | Add user to group: `sudo usermod -aG kvm $USER`<br>Module: `sudo modprobe kvm` |
-| **macOS** | HVF | `-accel hvf` | `sysctl -n kern.hv_support` (returns `1`) | Native Apple Silicon / Intel Hypervisor framework |
-| **Windows** | WHPX | `-accel whpx` | `Get-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform` | Enable feature: `Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform` |
-
----
-
-## Verification & Smoke Test
-
-To verify disk creation and emulator execution manually:
-
-```bash
-# Verify system emulator
-qemu-system-x86_64 --version
-
-# Verify disk management utility
-qemu-img --version
-
-# Test disk image lifecycle
-qemu-img create -f qcow2 test_disk.qcow2 10M
-qemu-img info test_disk.qcow2
-rm test_disk.qcow2
+.\skills\sanity-check\scripts\sanity-check.ps1 -Wizard
+.\skills\sanity-check\scripts\qemu-wizard.ps1
 ```
