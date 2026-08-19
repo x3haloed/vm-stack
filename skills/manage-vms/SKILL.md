@@ -1,164 +1,185 @@
 ---
 name: manage-vms
-description: Use when registering, creating, listing, inspecting, querying, updating, or deleting local virtual machines in the vm-stack registry on macOS.
+description: Use when creating, importing, renaming, resizing, cloning, inspecting, listing, or deleting local virtual machines and disk images in vm-stack on macOS.
 ---
 
 # Manage VMs
 
-Maintains a local registry of known virtual machines for `vm-stack` on macOS. VM definitions and metadata are stored in `~/.config/vm-stack/vms.json`.
+Authoritative QEMU and filesystem gateway for local virtual machine lifecycle management in `vm-stack` on macOS.
+
+All VM definitions and metadata are stored in `~/.config/vm-stack/vms.json` and default disk images in `~/.config/vm-stack/images/`.
 
 Bundled script: [scripts/manage-vms.sh](file:///Users/chad/Repos/vm-stack/skills/manage-vms/scripts/manage-vms.sh)
 
 ---
 
-## State Storage & Schema
+## Core Operational Rule for Agents
 
-The registry is stored at `${XDG_CONFIG_HOME:-$HOME/.config}/vm-stack/vms.json`:
-
-```json
-{
-  "version": 1,
-  "updated_at": "2026-08-19T17:40:00Z",
-  "vms": {
-    "ubuntu-arm64": {
-      "name": "ubuntu-arm64",
-      "arch": "aarch64",
-      "os": "ubuntu",
-      "disk": "/Users/chad/vms/ubuntu.qcow2",
-      "memory": "4G",
-      "cpus": 4,
-      "accel": "hvf",
-      "description": "Ubuntu 24.04 ARM64 Development VM",
-      "status": "stopped",
-      "extra_args": "",
-      "created_at": "2026-08-19T17:40:00Z",
-      "updated_at": "2026-08-19T17:40:00Z"
-    }
-  }
-}
-```
-
-### VM Record Attributes:
-- **`name`** *(string, required)*: Unique identifier for the VM (alphanumeric, dashes, underscores).
-- **`arch`** *(string)*: CPU architecture (e.g. `aarch64`, `x86_64`). Defaults to host architecture.
-- **`os`** *(string)*: OS distribution label (e.g. `ubuntu`, `debian`, `alpine`, `macos`, `generic`).
-- **`disk`** *(string)*: Absolute path to the VM disk image (`.qcow2`, `.img`, `.raw`).
-- **`memory`** *(string)*: RAM allocation (e.g. `4G`, `8G`, `2048M`). Default: `4G`.
-- **`cpus`** *(int)*: Number of virtual CPU cores. Default: `2`.
-- **`accel`** *(string)*: Hypervisor acceleration mode (`hvf`, `tcg`). Default: `hvf` on macOS.
-- **`description`** *(string)*: Human-readable description of VM workload or purpose.
-- **`status`** *(string)*: Current lifecycle state (`stopped`, `running`, `paused`). Default: `stopped`.
-- **`extra_args`** *(string)*: Custom QEMU flags or device specifications.
-- **`created_at`** / **`updated_at`** *(string)*: ISO-8601 UTC timestamps.
+> [!IMPORTANT]
+> **Always route VM disk creations, deletions, renames, resizing, and cloning through `manage-vms.sh`.**
+> Never run raw `qemu-img create`, `qemu-img resize`, `rm`, or `mv` directly on VM disk files without routing through `manage-vms.sh`.
+> 
+> `manage-vms.sh` executes the underlying QEMU and filesystem operations while ensuring that `~/.config/vm-stack/vms.json` remains the accurate, authoritative source of truth.
 
 ---
 
-## Command-Line Interface (CRUD)
+## Command Reference & Architecture
 
-### 1. Register a VM (`add`)
-Registers a new virtual machine definition in the registry:
+```
+                          ┌─────────────────────────────┐
+                          │   Agent / User Command      │
+                          │   manage-vms.sh <action>    │
+                          └──────────────┬──────────────┘
+                                         │
+                 ┌───────────────────────┴───────────────────────┐
+                 ▼                                               ▼
+   ┌───────────────────────────┐                   ┌───────────────────────────┐
+   │  Execute Real Operation   │                   │ Update Authoritative State│
+   │  - qemu-img create/resize │                   │ ~/.config/vm-stack/       │
+   │  - filesystem mv / rm     │ ───[ Success ]──► │   vms.json                │
+   │  - qemu-system execution  │                   │                           │
+   └───────────────────────────┘                   └───────────────────────────┘
+```
+
+---
+
+### 1. Create a VM & Disk (`create`)
+Invokes `qemu-img create` to allocate the disk image and registers the VM in `vms.json` in one atomic operation:
 
 ```bash
-# Basic registration
-./skills/manage-vms/scripts/manage-vms.sh add my-vm --disk /path/to/disk.qcow2
+# Basic creation (default: ~/.config/vm-stack/images/<name>.qcow2)
+./skills/manage-vms/scripts/manage-vms.sh create dev-ubuntu --size 20G
 
 # Full specification
-./skills/manage-vms/scripts/manage-vms.sh add dev-ubuntu \
-  --disk /Users/chad/vms/ubuntu-24.04.qcow2 \
+./skills/manage-vms/scripts/manage-vms.sh create dev-ubuntu \
+  --size 40G \
+  --format qcow2 \
   --arch aarch64 \
   --memory 8G \
   --cpus 4 \
   --os ubuntu \
   --accel hvf \
-  --description "Primary ARM64 development VM"
+  --description "Primary ARM64 development environment"
 ```
 
-### 2. List VMs (`list`)
-Lists all registered virtual machines:
+### 2. Import an Existing Disk Image (`import`)
+Inspects an existing disk image via `qemu-img info` and registers it:
 
 ```bash
-# Formatted table view
+./skills/manage-vms/scripts/manage-vms.sh import debian-cloud \
+  --disk /Users/chad/Downloads/debian-12-nocloud.qcow2 \
+  --os debian \
+  --memory 4G
+```
+
+### 3. Rename a VM & Disk Image (`rename`)
+Renames the VM entry in `vms.json` and automatically moves/renames the disk image file on the filesystem:
+
+```bash
+# Renames registry entry and moves images/dev-ubuntu.qcow2 -> images/staging-ubuntu.qcow2
+./skills/manage-vms/scripts/manage-vms.sh rename dev-ubuntu staging-ubuntu
+```
+
+### 4. Resize a VM Disk (`resize`)
+Expands the VM disk via `qemu-img resize` and updates the virtual size in `vms.json`:
+
+```bash
+# Grow disk by 10 Gigabytes
+./skills/manage-vms/scripts/manage-vms.sh resize staging-ubuntu +10G
+
+# Set absolute size
+./skills/manage-vms/scripts/manage-vms.sh resize staging-ubuntu 50G
+```
+
+### 5. Clone a VM (`clone`)
+Creates a fast Copy-on-Write linked overlay (default) or a full standalone copy via `qemu-img convert`, registering the cloned VM:
+
+```bash
+# Fast linked overlay clone (shares base image, only writes deltas)
+./skills/manage-vms/scripts/manage-vms.sh clone staging-ubuntu dev-worker-1
+
+# Standalone full clone
+./skills/manage-vms/scripts/manage-vms.sh clone staging-ubuntu dev-worker-standalone --full
+```
+
+### 6. Delete a VM & Clean Up Disk (`delete`)
+Deletes the disk image file from the filesystem and removes the VM from `vms.json`:
+
+```bash
+# Deletes both disk file and registry entry
+./skills/manage-vms/scripts/manage-vms.sh delete dev-worker-1
+
+# Unregisters VM while preserving disk file
+./skills/manage-vms/scripts/manage-vms.sh delete dev-worker-1 --keep-disk
+```
+
+### 7. Inspect VM & Live Disk State (`inspect`)
+Combines registered configuration in `vms.json` with live `qemu-img info` metadata:
+
+```bash
+# Human-readable summary
+./skills/manage-vms/scripts/manage-vms.sh inspect dev-ubuntu
+
+# Machine-readable JSON
+./skills/manage-vms/scripts/manage-vms.sh inspect dev-ubuntu --json
+```
+
+### 8. Audit & Reconcile Registry (`sync`)
+Scans the filesystem against `vms.json`, detects missing disk files, refreshes virtual sizes, and optionally prunes orphaned records:
+
+```bash
+# Audit status
+./skills/manage-vms/scripts/manage-vms.sh sync
+
+# Audit and prune records with missing disks
+./skills/manage-vms/scripts/manage-vms.sh sync --prune
+```
+
+### 9. Query & Update
+```bash
+# List all VMs
 ./skills/manage-vms/scripts/manage-vms.sh list
-
-# JSON array output (for agent parsing)
 ./skills/manage-vms/scripts/manage-vms.sh list --json
-
-# Names only (useful for shell loops)
 ./skills/manage-vms/scripts/manage-vms.sh list --quiet
-```
 
-### 3. Inspect a VM (`get`)
-Retrieves details for a specific VM:
-
-```bash
-# Formatted key-value text
-./skills/manage-vms/scripts/manage-vms.sh get dev-ubuntu
-
-# JSON object output
+# Get single VM record
 ./skills/manage-vms/scripts/manage-vms.sh get dev-ubuntu --json
-```
 
-### 4. Update a VM (`update`)
-Updates one or more attributes of an existing VM:
-
-```bash
-# Update memory and CPU allocations
+# Update resources or metadata
 ./skills/manage-vms/scripts/manage-vms.sh update dev-ubuntu --memory 16G --cpus 8
 
-# Update status
-./skills/manage-vms/scripts/manage-vms.sh update dev-ubuntu --status running
-
-# Update disk location
-./skills/manage-vms/scripts/manage-vms.sh update dev-ubuntu --disk /new/path/to/disk.qcow2
-```
-
-### 5. Check VM Existence (`exists`)
-Tests whether a VM exists in the registry (returns exit code `0` if present, `1` if missing):
-
-```bash
-if ./skills/manage-vms/scripts/manage-vms.sh exists dev-ubuntu; then
-  echo "VM exists"
-fi
-```
-
-### 6. Delete a VM (`delete`)
-Removes a virtual machine from the registry:
-
-```bash
-# Unregister VM (leaves disk image intact)
-./skills/manage-vms/scripts/manage-vms.sh delete dev-ubuntu
-
-# Unregister VM and delete disk image file
-./skills/manage-vms/scripts/manage-vms.sh delete dev-ubuntu --delete-disk
-```
-
-### 7. Print Registry Path (`path`)
-Outputs the absolute path to the active `vms.json` file:
-
-```bash
-./skills/manage-vms/scripts/manage-vms.sh path
+# Test existence (exit 0=yes, 1=no)
+./skills/manage-vms/scripts/manage-vms.sh exists dev-ubuntu
 ```
 
 ---
 
-## Agent Usage Recipes
+## State Schema (`~/.config/vm-stack/vms.json`)
 
-### Checking if a VM Exists Before Launching
-```bash
-if ! ./skills/manage-vms/scripts/manage-vms.sh exists "$VM_NAME"; then
-  ./skills/manage-vms/scripts/manage-vms.sh add "$VM_NAME" \
-    --disk "$DISK_PATH" \
-    --memory 4G \
-    --cpus 2 \
-    --os ubuntu
-fi
-```
-
-### Inspecting VM Parameters Programmatically
-```bash
-VM_JSON=$(./skills/manage-vms/scripts/manage-vms.sh get "$VM_NAME" --json)
-DISK_PATH=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['disk'])" "$VM_JSON")
-MEMORY=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['memory'])" "$VM_JSON")
+```json
+{
+  "version": 1,
+  "updated_at": "2026-08-19T17:47:00Z",
+  "vms": {
+    "dev-ubuntu": {
+      "name": "dev-ubuntu",
+      "arch": "aarch64",
+      "os": "ubuntu",
+      "disk": "/Users/chad/.config/vm-stack/images/dev-ubuntu.qcow2",
+      "format": "qcow2",
+      "virtual_size": "40.0G",
+      "backing_file": null,
+      "memory": "8G",
+      "cpus": 4,
+      "accel": "hvf",
+      "description": "Primary ARM64 development environment",
+      "status": "stopped",
+      "extra_args": "",
+      "created_at": "2026-08-19T17:40:00Z",
+      "updated_at": "2026-08-19T17:47:00Z"
+    }
+  }
+}
 ```
 
 ---
@@ -168,6 +189,6 @@ MEMORY=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['memory'])"
 | Code | Meaning |
 | :--- | :--- |
 | **0** | Success |
-| **1** | Command syntax or general execution error |
+| **1** | Command syntax or QEMU/FS execution error |
 | **2** | VM not found |
 | **3** | VM already exists |
