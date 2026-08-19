@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# qemu-wizard.sh (Interactive setup wizard for sanity-check)
-# ==============================================================================
-
-set -euo pipefail
-
+# Quick entrypoint for the vm-stack sanity check & setup wizard.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$SCRIPT_DIR/sanity-check.sh" --wizard "$@"
+if [[ ! -t 0 || ! -t 1 ]]; then
+  exec "$SCRIPT_DIR/launch-terminal.sh" "$SCRIPT_DIR/sanity-check.sh" --wizard "$@"
+else
+  exec "$SCRIPT_DIR/sanity-check.sh" --wizard "$@"
+fi

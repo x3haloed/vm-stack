@@ -7,7 +7,7 @@ description: Use when creating, provisioning, downloading installation media for
 
 Authoritative procedural guide and tooling for creating, provisioning, and automating local virtual machines in `vm-stack` on macOS.
 
-Covers automated media acquisition, unattended installation (`autounattend.xml` / `cloud-init`), UEFI NVRAM firmware handling, TPM/SecureBoot bypasses, and interactive wizard fallbacks when human intervention is needed.
+Covers automated media acquisition, unattended installation (`autounattend.xml` / `cloud-init`), UEFI NVRAM firmware handling, TPM/SecureBoot bypasses, and interactive desktop wizard fallbacks when human intervention is needed.
 
 ---
 
@@ -42,7 +42,8 @@ When a user asks to create or start a VM (e.g. *"I want you to start a Windows V
                      ▼                             ▼
                   [ YES ]                       [ NO ]
                      │                             │
-                     │                     Pop Open Media Wizard
+                     │                     Pop Open Desktop Wizard
+                     │                     launch-terminal.sh
                      │                     create-vm-wizard.sh
                      │                             │
                      └──────────────┬──────────────┘
@@ -71,6 +72,20 @@ When a user asks to create or start a VM (e.g. *"I want you to start a Windows V
 
 ---
 
+## Critical Execution Rule: Launching Wizards on Desktop
+
+> [!IMPORTANT]
+> **Never run an interactive wizard inside your own background agent subshell / tool call (e.g. `run_command`).**
+> Agent tool subshells have no interactive TTY or keyboard access to the user's desktop, so running an interactive wizard inside `run_command` causes the task to hang waiting on stdin.
+>
+> **Always launch the wizard in a visible terminal window on the user's desktop** using the bundled `launch-terminal.sh` helper:
+> ```bash
+> ./skills/create-vm/scripts/launch-terminal.sh ./skills/create-vm/scripts/create-vm-wizard.sh
+> ```
+> This immediately opens a visible macOS Terminal window on the user's desktop so the user can directly interact with the wizard, while your agent tool call finishes cleanly.
+
+---
+
 ## Step-by-Step Guidance by OS Type
 
 ### A. Windows 11 / Windows 10 Provisioning
@@ -86,9 +101,9 @@ Check if the Windows ISO is already cached:
 ```
 - If missing:
   - If a direct download URL or path was supplied, save/symlink it to `~/.config/vm-stack/media/`.
-  - Otherwise, launch the interactive setup wizard so the human can download the official ISO from Microsoft and provide the path:
+  - Otherwise, launch the interactive setup wizard on the user's desktop so the human can download the official ISO from Microsoft and provide the path:
     ```bash
-    ./skills/create-vm/scripts/create-vm-wizard.sh
+    ./skills/create-vm/scripts/launch-terminal.sh ./skills/create-vm/scripts/create-vm-wizard.sh
     ```
 - Automatically ensure Red Hat VirtIO drivers are present:
   ```bash
@@ -114,9 +129,10 @@ This single command executes the complete unattended pipeline:
 3. Generates `autounattend.xml` with `LabConfig` bypasses (`BypassTPMCheck=1`, `BypassSecureBootCheck=1`, `BypassRAMCheck=1`, `BypassCPUCheck=1`, `BypassStorageCheck=1`), automatic partition formatting, default local admin account (`admin`/`admin`), OOBE bypass, and OpenSSH server enablement.
 4. Launches QEMU with:
    - `-accel hvf`
-   - `-device nvme,drive=hd0` (enables inbox Windows NVMe storage driver without manual driver injection)
-   - `-drive file=virtio-win.iso` (provides VirtIO network and balloon drivers)
-   - `-drive file=unattend.iso`
+   - `-device nvme,drive=hd0` (enables inbox Windows NVMe storage driver)
+   - `-device usb-storage,drive=win_iso` (attaches Windows ISO as native USB media so WinPE never throws missing CD/DVD driver errors)
+   - `-device usb-storage,drive=virtio_iso` (provides VirtIO network and balloon drivers with automated search paths)
+   - `-device usb-storage,drive=unattend_iso` (provides zero-touch `autounattend.xml` answer file on USB drive root)
    - Port forwarding: Host `2222` -> Guest `22` (SSH), Host `3389` -> Guest `3389` (RDP).
 
 ---
@@ -146,18 +162,13 @@ For Linux virtual machines, pre-baked cloud images with `cloud-init` provide nea
 
 ---
 
-## When to Launch the Setup Wizard
+## When to Launch the Desktop Wizard
 
-When any of the following conditions occur, **do not prompt the user with raw terminal commands**. Instead, launch the interactive setup wizard:
+When human assistance is needed (such as downloading a Windows ISO from Microsoft, custom hardware selection, or visual console monitoring), launch the wizard on the user's desktop:
 
 ```bash
-./skills/create-vm/scripts/create-vm-wizard.sh
+./skills/create-vm/scripts/launch-terminal.sh ./skills/create-vm/scripts/create-vm-wizard.sh
 ```
-
-### Wizard Triggers:
-1. **Missing Windows Installation ISO**: The wizard opens Microsoft's official download portal in the user's browser, explains which edition to select, and prompts for the downloaded ISO file path.
-2. **Ambiguous Hardware Requirements**: The wizard guides the user through selecting RAM, vCPU cores, and disk sizing.
-3. **Interactive Graphical Installation**: The wizard launches the VM display and monitors setup through to desktop readiness.
 
 ---
 
@@ -165,6 +176,7 @@ When any of the following conditions occur, **do not prompt the user with raw te
 
 | Script | Purpose |
 | :--- | :--- |
+| **[scripts/launch-terminal.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/launch-terminal.sh)** | Spawns any wizard or command in a visible desktop GUI terminal (Terminal.app / iTerm2) for the human user. |
 | **[scripts/fetch-media.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/fetch-media.sh)** | Downloads and manages ISOs, VirtIO drivers, and cloud images in `~/.config/vm-stack/media/`. |
 | **[scripts/generate-unattend.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/generate-unattend.sh)** | Generates Windows `autounattend.xml` with TPM/SecureBoot bypasses, user credentials, and builds `unattend.iso`. |
 | **[scripts/create-windows-vm.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/create-windows-vm.sh)** | End-to-end automated runner for Windows 11/10 unattended QEMU provisioning. |

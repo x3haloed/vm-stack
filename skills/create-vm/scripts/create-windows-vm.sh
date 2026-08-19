@@ -255,9 +255,12 @@ QEMU_CMD=(
   -device usb-tablet
   -drive file="$DISK_PATH",if=none,id=hd0,format=qcow2
   -device nvme,drive=hd0,serial=nvme0
-  -drive file="$ISO_PATH",media=cdrom,index=0
-  -drive file="$VIRTIO_ISO",media=cdrom,index=1
-  -drive file="$UNATTEND_ISO",media=cdrom,index=2
+  -device usb-storage,drive=win_iso,bootindex=1
+  -drive file="$ISO_PATH",if=none,id=win_iso,format=raw,media=cdrom,readonly=on
+  -device usb-storage,drive=virtio_iso
+  -drive file="$VIRTIO_ISO",if=none,id=virtio_iso,format=raw,media=cdrom,readonly=on
+  -device usb-storage,drive=unattend_iso
+  -drive file="$UNATTEND_ISO",if=none,id=unattend_iso,format=raw,media=cdrom,readonly=on
   -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22,hostfwd=tcp::${RDP_PORT}-:3389
   -device virtio-net-pci,netdev=net0
 )

@@ -66,9 +66,9 @@ When preparing an environment for VM workloads, follow this deterministic decisi
                                      ▼                           ▼
                                   [ NO ]                      [ YES ]
                                      │                           │
-                            Run Non-Privileged           Pop Open Interactive
+                            Run Non-Privileged           Pop Open Desktop
                             Install (e.g. brew)          Setup Wizard for User
-                                     │                   sanity-check.sh --wizard
+                                     │                   launch-terminal.sh ...
                                      │                           │
                                      └─────────────┬─────────────┘
                                                    │
@@ -112,32 +112,23 @@ nix-env -iA nixpkgs.qemu
 scoop install qemu
 ```
 
-### 3. Step 3: Launch Interactive Wizard When Privileged Escalation is Required
+### 3. Step 3: Launch Desktop Wizard When Privileged Escalation is Required
 If package installation requires `sudo` / root (Debian/Ubuntu `apt`, Fedora `dnf`, Arch `pacman`, Alpine `apk`, openSUSE `zypper`, macOS MacPorts) or if hardware acceleration requires group configuration (`usermod -aG kvm $USER`) or Windows WHPX feature enablement:
 
 > [!IMPORTANT]
-> **Never prompt the user with ad-hoc raw terminal commands** like `please run sudo apt install ...`. 
-> Instead, pop open the interactive setup wizard so the user is guided through structured, clear stages with confirmation gates and automatic smoke testing.
-
-Launch the wizard in the user's terminal:
-
-```bash
-# macOS / Linux
-./skills/sanity-check/scripts/sanity-check.sh --wizard
-# or shortcut:
-./skills/sanity-check/scripts/qemu-wizard.sh
-
-# Windows (PowerShell)
-.\skills\sanity-check\scripts\sanity-check.ps1 -Wizard
-# or shortcut:
-.\skills\sanity-check\scripts\qemu-wizard.ps1
-```
+> **Never run the interactive wizard inside a background subshell or agent tool call (`run_command`).**
+> Agent tool subshells have no interactive TTY or keyboard access, which causes tasks to hang.
+> 
+> **Always launch the wizard in a visible terminal window on the user's desktop** using `launch-terminal.sh`:
+> ```bash
+> ./skills/sanity-check/scripts/launch-terminal.sh ./skills/sanity-check/scripts/sanity-check.sh --wizard
+> ```
 
 ---
 
 ## Command-Line Reference
 
-### macOS & Linux (`sanity-check.sh` / `qemu-wizard.sh`)
+### macOS & Linux (`sanity-check.sh` / `launch-terminal.sh`)
 ```bash
 # Status check & preferences initialization (Exit 0=ready, 2=missing)
 ./skills/sanity-check/scripts/sanity-check.sh --check
@@ -148,9 +139,8 @@ Launch the wizard in the user's terminal:
 # Target a specific architecture (e.g. aarch64, arm, x86_64)
 ./skills/sanity-check/scripts/sanity-check.sh --check --target aarch64
 
-# Launch interactive multi-stage wizard
-./skills/sanity-check/scripts/sanity-check.sh --wizard
-./skills/sanity-check/scripts/qemu-wizard.sh
+# Launch interactive wizard on the user's desktop
+./skills/sanity-check/scripts/launch-terminal.sh ./skills/sanity-check/scripts/sanity-check.sh --wizard
 ```
 
 ### Windows (`sanity-check.ps1` / `qemu-wizard.ps1`)

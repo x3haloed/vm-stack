@@ -98,8 +98,22 @@ generate_xml_content() {
   cat << EOF
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
-    <!-- Pass 1: Windows PE (LabConfig Bypass + Disk Partitioning) -->
+    <!-- Pass 1: Windows PE (LabConfig Bypass + VirtIO Driver Search + Disk Partitioning) -->
     <settings pass="windowsPE">
+        <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="${TARGET_ARCH}" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/StateMachine" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <DriverPaths>
+                <PathAndCredentials wcm:action="add" wcm:keyValue="1">
+                    <Path>D:\</Path>
+                </PathAndCredentials>
+                <PathAndCredentials wcm:action="add" wcm:keyValue="2">
+                    <Path>E:\</Path>
+                </PathAndCredentials>
+                <PathAndCredentials wcm:action="add" wcm:keyValue="3">
+                    <Path>F:\</Path>
+                </PathAndCredentials>
+            </DriverPaths>
+        </component>
+
         <component name="Microsoft-Windows-Setup" processorArchitecture="${TARGET_ARCH}" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/StateMachine" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
             <!-- Bypass Windows 11 TPM, SecureBoot, RAM, CPU & Storage checks -->
             <RunSynchronous>
@@ -196,6 +210,23 @@ generate_xml_content() {
             <SystemLocale>en-US</SystemLocale>
             <UILanguage>en-US</UILanguage>
             <UserLocale>en-US</UserLocale>
+        </component>
+    </settings>
+
+    <!-- Pass 2: Offline Servicing (Inject VirtIO Drivers into Installed Image) -->
+    <settings pass="offlineServicing">
+        <component name="Microsoft-Windows-PnpCustomizationsNonWinPE" processorArchitecture="${TARGET_ARCH}" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/StateMachine" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <DriverPaths>
+                <PathAndCredentials wcm:action="add" wcm:keyValue="1">
+                    <Path>D:\</Path>
+                </PathAndCredentials>
+                <PathAndCredentials wcm:action="add" wcm:keyValue="2">
+                    <Path>E:\</Path>
+                </PathAndCredentials>
+                <PathAndCredentials wcm:action="add" wcm:keyValue="3">
+                    <Path>F:\</Path>
+                </PathAndCredentials>
+            </DriverPaths>
         </component>
     </settings>
 

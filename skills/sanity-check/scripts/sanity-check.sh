@@ -759,12 +759,18 @@ output_text() {
   fi
 }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Run detection
 check_qemu_installed
 check_acceleration
 
 # Route by MODE
 if [[ "$MODE" = "wizard" ]]; then
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+    exec "$SCRIPT_DIR/launch-terminal.sh" "$SCRIPT_PATH" --wizard
+  fi
   run_wizard
   exit 0
 fi

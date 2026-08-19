@@ -18,10 +18,27 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 MANAGE_VMS_SCRIPT="$REPO_DIR/skills/manage-vms/scripts/manage-vms.sh"
 FETCH_MEDIA_SCRIPT="$SCRIPT_DIR/fetch-media.sh"
 CREATE_WIN_SCRIPT="$SCRIPT_DIR/create-windows-vm.sh"
+LAUNCH_TERMINAL_SCRIPT="$SCRIPT_DIR/launch-terminal.sh"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vm-stack"
 MEDIA_DIR="$CONFIG_DIR/media"
 IMAGES_DIR="$CONFIG_DIR/images"
+
+# ──────────────────────────────────────────────────────────────────────────
+# Check for Interactive Terminal vs Background Agent Subshell
+# ──────────────────────────────────────────────────────────────────────────
+
+# If invoked with --terminal OR executed non-interactively (e.g. from an agent task),
+# pop open a visible terminal window on the user's desktop and exit gracefully.
+if [[ "${1:-}" = "--terminal" ]] || [[ ! -t 0 || ! -t 1 ]]; then
+  SCRIPT_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+  # Filter out --terminal from args if present
+  ARGS=()
+  for arg in "$@"; do
+    [[ "$arg" != "--terminal" ]] && ARGS+=("$arg")
+  done
+  exec "$LAUNCH_TERMINAL_SCRIPT" "$SCRIPT_PATH" "${ARGS[@]}"
+fi
 
 # Terminal styling
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && [[ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]]; then
