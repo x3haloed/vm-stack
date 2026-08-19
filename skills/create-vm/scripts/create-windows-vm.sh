@@ -34,6 +34,7 @@ fi
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vm-stack"
 MEDIA_DIR="$CONFIG_DIR/media"
 IMAGES_DIR="$CONFIG_DIR/images"
+RUN_DIR="$CONFIG_DIR/run"
 
 log_info()  { printf '%s[INFO]%s %s\n' "$BLUE" "$RESET" "$1"; }
 log_warn()  { printf '%s[WARN]%s %s\n' "$YELLOW" "$RESET" "$1" >&2; }
@@ -218,6 +219,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --cpus "$CPUS" \
       --os windows \
       --accel hvf \
+      --ssh-port "$SSH_PORT" \
+      --rdp-port "$RDP_PORT" \
       --description "Automated Windows 11 ($QEMU_ARCH) VM"
   fi
 fi
@@ -289,4 +292,19 @@ log_info "Starting QEMU Windows installation..."
 log_info "Port Forwarding: Host :$SSH_PORT -> Guest :22 (SSH), Host :$RDP_PORT -> Guest :3389 (RDP)"
 log_info "Default Credentials: Username='$USERNAME', Password='$PASSWORD'"
 
-exec "${QEMU_CMD[@]}"
+mkdir -p "$RUN_DIR"
+PID_FILE="$RUN_DIR/${VM_NAME}.pid"
+
+# Execute QEMU with PID tracking
+"${QEMU_CMD[@]}" &
+QEMU_PID=$!
+echo "$QEMU_PID" > "$PID_FILE"
+
+cleanup_pid() {
+  rm -f "$PID_FILE" 2>/dev/null || true
+}
+trap cleanup_pid EXIT INT TERM
+
+wait "$QEMU_PID" || true
+cleanup_pid
+log_info "Windows installation session finished for '$VM_NAME'."

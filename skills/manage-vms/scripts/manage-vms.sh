@@ -2,10 +2,11 @@
 # ==============================================================================
 # manage-vms.sh
 # Authoritative gateway and wrapper around QEMU and filesystem operations
-# for local virtual machines on macOS.
+# for local virtual machines on macOS, Linux, and Windows.
 #
-# Forces all VM disk creation, deletion, resizing, cloning, and renaming
-# to synchronize atomically with ~/.config/vm-stack/vms.json.
+# Enforces that all VM disk creation, deletion, resizing, cloning, renaming,
+# and runtime execution (start/stop) are bound atomically to
+# ~/.config/vm-stack/vms.json.
 # ==============================================================================
 
 set -euo pipefail
@@ -25,6 +26,7 @@ fi
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vm-stack"
 REGISTRY_FILE="$CONFIG_DIR/vms.json"
 IMAGES_DIR="$CONFIG_DIR/images"
+RUN_DIR="$CONFIG_DIR/run"
 
 log_info()  { printf '%s[INFO]%s %s\n' "$BLUE" "$RESET" "$1"; }
 log_warn()  { printf '%s[WARN]%s %s\n' "$YELLOW" "$RESET" "$1" >&2; }
@@ -34,65 +36,72 @@ show_help() {
   cat << EOF
 ${BOLD}Usage:${RESET} manage-vms.sh <command> [arguments...]
 
-Authoritative QEMU and Filesystem gateway for vm-stack on macOS.
-Registry state: ${DIM}$REGISTRY_FILE${RESET}
-Default images: ${DIM}$IMAGES_DIR/${RESET}
+Authoritative QEMU and Filesystem gateway for vm-stack.
+Registry inventory: ${DIM}$REGISTRY_FILE${RESET}
+Default images dir: ${DIM}$IMAGES_DIR/${RESET}
+Runtime state dir:  ${DIM}$RUN_DIR/${RESET}
 
-${BOLD}QEMU & Disk Wrapper Commands:${RESET}
+${BOLD}QEMU & Disk Management (Bound to Registry):${RESET}
   ${BLUE}create${RESET} <name> [options]         Create a new QEMU disk image and register VM
   ${BLUE}import${RESET} <name> [options]         Inspect an existing disk image and register VM
-  ${BLUE}rename${RESET} <old> <new> [options]    Rename VM and optionally rename disk file
+  ${BLUE}rename${RESET} <old> <new> [options]    Rename VM and move disk image
   ${BLUE}resize${RESET} <name> <size>            Resize VM disk via qemu-img and update registry
   ${BLUE}clone${RESET} <source> <new> [options]  Clone VM (linked overlay or full copy) and register
   ${BLUE}delete${RESET} <name> [options]         Delete VM registry entry and remove disk file
-  ${BLUE}inspect${RESET} <name> [options]        Inspect VM configuration and live qemu-img info
-  ${BLUE}sync${RESET} [options]                  Audit & reconcile registry against filesystem
+  ${BLUE}snapshot${RESET} <name> <action> [...]    Manage internal disk snapshots (create, list, rollback, delete)
 
-${BOLD}Registry Query & Update Commands:${RESET}
-  ${BLUE}list${RESET} [options]                  List all registered VMs (table or JSON)
-  ${BLUE}get${RESET} <name> [options]             Get registered VM metadata
-  ${BLUE}update${RESET} <name> [options]          Update VM hardware or configuration settings
+${BOLD}VM Lifecycle & Execution:${RESET}
+  ${BLUE}start${RESET} <name> [options]          Start VM with QEMU (foreground or background daemon)
+  ${BLUE}stop${RESET} <name> [options]           Stop running VM (graceful ACPI shutdown or force kill)
+  ${BLUE}status${RESET} <name> [options]         Check live runtime status (process liveness, ports)
+
+${BOLD}Inventory Query & Inspection:${RESET}
+  ${BLUE}list${RESET} [options]                  List all registered VMs with live probed status
+  ${BLUE}inspect${RESET} <name> [options]        Deep inspection combining registry spec + live disk/process
+  ${BLUE}get${RESET} <name> [options]             Get authoritative VM specification from registry
+  ${BLUE}update${RESET} <name> [options]          Update VM specification settings
   ${BLUE}exists${RESET} <name>                   Check if a VM is registered (exit 0=yes, 1=no)
+  ${BLUE}sync${RESET} [options]                  Audit registry against filesystem & clean dead runtime states
   ${BLUE}path${RESET}                            Print absolute path to the registry file
   ${BLUE}help${RESET}                            Show this help message
 
 ${BOLD}Options for 'create':${RESET}
-  --size <size>              Virtual disk size (e.g. 20G, 100G) [Required]
+  --size <size>              Virtual disk size (e.g. 20G, 64G) [Required]
   --format <fmt>             Disk format (qcow2, raw) [default: qcow2]
   --disk <path>              Target disk image path [default: images/<name>.<format>]
   --backing-file <path>      Base backing image for copy-on-write
   --arch <arch>              Target architecture (aarch64, x86_64) [default: host arch]
   --memory <size>            Memory allocation (e.g. 4G, 8G) [default: 4G]
   --cpus <n>                 CPU core count [default: 2]
-  --os <os_type>             OS label (e.g. ubuntu, debian, alpine, macos) [default: generic]
-  --accel <accel>            Acceleration framework (hvf, tcg) [default: hvf]
+  --os <os_type>             OS label (windows, ubuntu, debian, alpine, generic) [default: generic]
+  --accel <accel>            Acceleration framework (hvf, kvm, whpx, tcg) [default: auto]
+  --ssh-port <port>          Default host port for SSH forwarding [default: 2222]
+  --rdp-port <port>          Default host port for RDP forwarding [default: 3389]
   --description <text>       Human-readable description
   --extra-args <args>        Extra arguments for QEMU execution
 
-${BOLD}Options for 'import':${RESET}
-  --disk <path>              Path to existing disk image [Required]
-  --arch, --memory, --cpus, --os, --accel, --description, --extra-args
+${BOLD}Options for 'start':${RESET}
+  -d, --daemon, --background Run VM in background process (PID tracked in run/<name>.pid)
+  --display <mode>           Display mode (default, cocoa, gtk, vnc, none) [default: default]
+  --ssh-port <port>          Override host SSH forward port
+  --rdp-port <port>          Override host RDP forward port
+  --memory <size>            Override RAM allocation for this run
+  --cpus <n>                 Override CPU core count for this run
+  --extra-args <args>        Additional QEMU arguments for this invocation
+  --dry-run                  Print assembled QEMU command without executing
 
-${BOLD}Options for 'rename':${RESET}
-  --rename-disk              Also rename the disk file on filesystem (default: true if in images/)
-  --no-rename-disk           Do not rename the disk file on filesystem
+${BOLD}Options for 'stop':${RESET}
+  -f, --force                Force immediate termination (SIGKILL) instead of graceful SIGTERM
 
-${BOLD}Options for 'clone':${RESET}
-  --linked                   Create lightweight copy-on-write overlay (default)
-  --full                     Create independent full copy via qemu-img convert
-  --disk <path>              Target cloned disk path
-  --description <text>       Description for cloned VM
+${BOLD}Options for 'snapshot':${RESET}
+  manage-vms.sh snapshot <name> create <snapname>
+  manage-vms.sh snapshot <name> list [-j/--json]
+  manage-vms.sh snapshot <name> rollback <snapname>
+  manage-vms.sh snapshot <name> delete <snapname>
 
-${BOLD}Options for 'delete':${RESET}
-  --keep-disk                Do not delete the disk image file from disk
-  -f, --force                Do not prompt for confirmation
-
-${BOLD}Options for 'inspect' / 'list' / 'get':${RESET}
+${BOLD}Options for 'inspect' / 'status' / 'list' / 'get':${RESET}
   -j, --json                 Output machine-readable JSON format
   -q, --quiet                Output VM names only (for 'list')
-
-${BOLD}Options for 'sync':${RESET}
-  --prune                    Remove registry entries whose disk files no longer exist
 
 ${BOLD}Exit Codes:${RESET}
   0 - Success
@@ -104,7 +113,7 @@ EOF
 
 # Python core engine executing atomic QEMU and filesystem operations
 run_py_gateway() {
-  /usr/bin/python3 - "$CONFIG_DIR" "$REGISTRY_FILE" "$IMAGES_DIR" "$@" << 'PYEOF'
+  /usr/bin/python3 - "$CONFIG_DIR" "$REGISTRY_FILE" "$IMAGES_DIR" "$RUN_DIR" "$@" << 'PYEOF'
 import sys
 import os
 import json
@@ -112,20 +121,38 @@ import subprocess
 import datetime
 import argparse
 import shutil
+import signal
+import time
+import socket
 
 config_dir = sys.argv[1]
 registry_path = sys.argv[2]
 images_dir = sys.argv[3]
-action = sys.argv[4]
-args = sys.argv[5:]
+run_dir = sys.argv[4]
+action = sys.argv[5]
+args = sys.argv[6:]
+
+# ──────────────────────────────────────────────────────────────────────────
+# Utility Functions
+# ──────────────────────────────────────────────────────────────────────────
 
 def get_host_arch():
-    m = os.uname().machine
+    m = os.uname().machine.lower()
     if m in ["arm64", "aarch64"]:
         return "aarch64"
     if m in ["x86_64", "amd64"]:
         return "x86_64"
     return m
+
+def get_default_accel():
+    uname_s = os.uname().sysname.lower()
+    if uname_s == "darwin":
+        return "hvf"
+    elif uname_s == "linux":
+        return "kvm"
+    elif "windows" in uname_s or "nt" in uname_s:
+        return "whpx"
+    return "tcg"
 
 def get_utc_iso():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -133,6 +160,7 @@ def get_utc_iso():
 def ensure_dirs():
     os.makedirs(config_dir, exist_ok=True)
     os.makedirs(images_dir, exist_ok=True)
+    os.makedirs(run_dir, exist_ok=True)
 
 def load_registry():
     ensure_dirs()
@@ -158,20 +186,6 @@ def save_registry(data):
         f.write("\n")
     os.replace(temp_file, registry_path)
 
-def run_qemu_img_info(disk_path):
-    if not os.path.exists(disk_path):
-        return None
-    try:
-        res = subprocess.run(
-            ["qemu-img", "info", "--output=json", disk_path],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return json.loads(res.stdout)
-    except Exception as e:
-        return None
-
 def format_size(bytes_val):
     if bytes_val is None:
         return "unknown"
@@ -187,7 +201,166 @@ def format_size(bytes_val):
         return str(bytes_val)
 
 # ──────────────────────────────────────────────────────────────────────────
-# Action Implementations
+# Dynamic Probing (Disk & Runtime)
+# ──────────────────────────────────────────────────────────────────────────
+
+def probe_disk_info(disk_path):
+    """Probes disk properties dynamically via qemu-img info."""
+    if not disk_path or not os.path.exists(disk_path):
+        return {
+            "exists": False,
+            "path": disk_path or "",
+            "actual_size_bytes": 0,
+            "actual_size": "missing",
+            "virtual_size_bytes": 0,
+            "virtual_size": "missing",
+            "format": "unknown",
+            "backing_file": None,
+            "snapshots": []
+        }
+
+    try:
+        res = subprocess.run(
+            ["qemu-img", "info", "--output=json", disk_path],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        data = json.loads(res.stdout)
+        actual_bytes = os.path.getsize(disk_path)
+        v_bytes = data.get("virtual-size", 0)
+        return {
+            "exists": True,
+            "path": disk_path,
+            "actual_size_bytes": actual_bytes,
+            "actual_size": format_size(actual_bytes),
+            "virtual_size_bytes": v_bytes,
+            "virtual_size": format_size(v_bytes),
+            "format": data.get("format", "qcow2"),
+            "backing_file": data.get("backing-filename"),
+            "snapshots": [s.get("name") for s in data.get("snapshots", [])]
+        }
+    except Exception as e:
+        actual_bytes = os.path.getsize(disk_path) if os.path.exists(disk_path) else 0
+        return {
+            "exists": True,
+            "path": disk_path,
+            "actual_size_bytes": actual_bytes,
+            "actual_size": format_size(actual_bytes),
+            "virtual_size_bytes": 0,
+            "virtual_size": "unknown",
+            "format": "unknown",
+            "backing_file": None,
+            "snapshots": []
+        }
+
+def get_pid_file_path(vm_name):
+    return os.path.join(run_dir, f"{vm_name}.pid")
+
+def is_process_running(pid):
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+def check_tcp_port(port, host="127.0.0.1", timeout=0.2):
+    if not port:
+        return False
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+def probe_vm_runtime(vm_name, disk_path=None, ssh_port=None):
+    """Probes live runtime state for a given VM."""
+    pid_file = get_pid_file_path(vm_name)
+    pid = None
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, "r") as f:
+                content = f.read().strip()
+                if content.isdigit():
+                    pid = int(content)
+        except Exception:
+            pid = None
+
+    is_alive = False
+    if pid and is_process_running(pid):
+        is_alive = True
+    elif pid and not is_process_running(pid):
+        # Process died, clean up stale pid file
+        try:
+            os.remove(pid_file)
+        except Exception:
+            pass
+        pid = None
+
+    # Fallback: scan process list if pid file missing
+    if not is_alive and disk_path and os.path.exists(disk_path):
+        try:
+            ps_out = subprocess.run(["ps", "-ax", "-o", "pid,command"], capture_output=True, text=True).stdout
+            for line in ps_out.splitlines():
+                if "qemu-system" in line and os.path.basename(disk_path) in line:
+                    parts = line.strip().split(None, 1)
+                    if parts and parts[0].isdigit():
+                        found_pid = int(parts[0])
+                        if is_process_running(found_pid):
+                            pid = found_pid
+                            is_alive = True
+                            # write back recovered pid
+                            try:
+                                with open(pid_file, "w") as f:
+                                    f.write(f"{pid}\n")
+                            except Exception:
+                                pass
+                            break
+        except Exception:
+            pass
+
+    ssh_ready = False
+    if is_alive and ssh_port:
+        ssh_ready = check_tcp_port(ssh_port)
+
+    status_str = "running" if is_alive else "stopped"
+    return {
+        "status": status_str,
+        "is_running": is_alive,
+        "pid": pid if is_alive else None,
+        "ssh_ready": ssh_ready if is_alive else False
+    }
+
+def synthesize_vm_info(vm_spec):
+    """Combines authoritative spec with live disk and runtime probes."""
+    name = vm_spec["name"]
+    disk_path = vm_spec.get("disk", "")
+    ssh_port = vm_spec.get("ssh_port")
+
+    disk_info = probe_disk_info(disk_path)
+    runtime_info = probe_vm_runtime(name, disk_path, ssh_port)
+
+    return {
+        "name": name,
+        "arch": vm_spec.get("arch", get_host_arch()),
+        "os": vm_spec.get("os", "generic"),
+        "cpus": vm_spec.get("cpus", 2),
+        "memory": vm_spec.get("memory", "4G"),
+        "accel": vm_spec.get("accel", get_default_accel()),
+        "ssh_port": vm_spec.get("ssh_port", 2222),
+        "rdp_port": vm_spec.get("rdp_port", 3389),
+        "extra_args": vm_spec.get("extra_args", ""),
+        "description": vm_spec.get("description", ""),
+        "created_at": vm_spec.get("created_at"),
+        "updated_at": vm_spec.get("updated_at"),
+        "disk": disk_info,
+        "runtime": runtime_info
+    }
+
+# ──────────────────────────────────────────────────────────────────────────
+# Actions
 # ──────────────────────────────────────────────────────────────────────────
 
 if action == "path":
@@ -197,17 +370,14 @@ if action == "path":
 elif action == "exists":
     if len(args) < 1:
         sys.exit(1)
-    name = args[0]
+    name = args[0].strip()
     data = load_registry()
-    if name in data["vms"]:
-        sys.exit(0)
-    else:
-        sys.exit(1)
+    sys.exit(0 if name in data["vms"] else 1)
 
 elif action == "create":
     parser = argparse.ArgumentParser(prog="manage-vms create")
     parser.add_argument("name")
-    parser.add_argument("--size", required=True, help="Virtual disk size, e.g. 20G")
+    parser.add_argument("--size", required=True, help="Virtual disk size, e.g. 20G, 64G")
     parser.add_argument("--format", default="qcow2", choices=["qcow2", "raw"])
     parser.add_argument("--disk", default="")
     parser.add_argument("--backing-file", default="")
@@ -215,7 +385,9 @@ elif action == "create":
     parser.add_argument("--memory", default="4G")
     parser.add_argument("--cpus", type=int, default=2)
     parser.add_argument("--os", default="generic")
-    parser.add_argument("--accel", default="hvf")
+    parser.add_argument("--accel", default="auto")
+    parser.add_argument("--ssh-port", type=int, default=2222)
+    parser.add_argument("--rdp-port", type=int, default=3389)
     parser.add_argument("--description", default="")
     parser.add_argument("--extra-args", default="")
 
@@ -238,7 +410,7 @@ elif action == "create":
 
     os.makedirs(os.path.dirname(disk_path), exist_ok=True)
 
-    # Build qemu-img create command
+    # 1. Allocate disk image via qemu-img
     cmd = ["qemu-img", "create", "-f", parsed.format]
     if parsed.backing_file:
         backing_abs = os.path.abspath(parsed.backing_file)
@@ -249,7 +421,7 @@ elif action == "create":
     cmd.extend([disk_path, parsed.size])
 
     try:
-        print(f"[INFO] Running: {' '.join(cmd)}")
+        print(f"[INFO] Creating QEMU disk: {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
         print(f"[ERROR] qemu-img create failed with code {e.returncode}.", file=sys.stderr)
@@ -258,35 +430,28 @@ elif action == "create":
         print("[ERROR] 'qemu-img' command not found in PATH.", file=sys.stderr)
         sys.exit(1)
 
-    # Inspect created disk
-    info = run_qemu_img_info(disk_path)
-    virtual_size = parsed.size
-    fmt = parsed.format
-    if info:
-        virtual_size = format_size(info.get("virtual-size"))
-        fmt = info.get("format", parsed.format)
-
-    vm_entry = {
+    # 2. Bind authoritative VM specification to registry
+    accel_val = get_default_accel() if parsed.accel == "auto" else parsed.accel
+    vm_spec = {
         "name": name,
-        "arch": parsed.arch,
-        "os": parsed.os,
         "disk": disk_path,
-        "format": fmt,
-        "virtual_size": virtual_size,
-        "backing_file": os.path.abspath(parsed.backing_file) if parsed.backing_file else None,
-        "memory": parsed.memory,
+        "os": parsed.os,
+        "arch": parsed.arch,
         "cpus": parsed.cpus,
-        "accel": parsed.accel,
-        "description": parsed.description,
-        "status": "stopped",
+        "memory": parsed.memory,
+        "accel": accel_val,
+        "ssh_port": parsed.ssh_port,
+        "rdp_port": parsed.rdp_port,
         "extra_args": parsed.extra_args,
+        "description": parsed.description,
         "created_at": get_utc_iso(),
         "updated_at": get_utc_iso()
     }
 
-    data["vms"][name] = vm_entry
+    data["vms"][name] = vm_spec
     save_registry(data)
-    print(f"[INFO] Successfully created disk and registered VM '{name}' ({virtual_size} {fmt}).")
+
+    print(f"[INFO] Successfully created disk and registered VM '{name}' in inventory.")
     sys.exit(0)
 
 elif action == "import":
@@ -297,7 +462,9 @@ elif action == "import":
     parser.add_argument("--memory", default="4G")
     parser.add_argument("--cpus", type=int, default=2)
     parser.add_argument("--os", default="generic")
-    parser.add_argument("--accel", default="hvf")
+    parser.add_argument("--accel", default="auto")
+    parser.add_argument("--ssh-port", type=int, default=2222)
+    parser.add_argument("--rdp-port", type=int, default=3389)
     parser.add_argument("--description", default="")
     parser.add_argument("--extra-args", default="")
 
@@ -314,36 +481,26 @@ elif action == "import":
         print(f"[ERROR] Disk image file not found: {parsed.disk}", file=sys.stderr)
         sys.exit(1)
 
-    info = run_qemu_img_info(disk_path)
-    fmt = "qcow2"
-    vsize = "unknown"
-    backing = None
-    if info:
-        fmt = info.get("format", "qcow2")
-        vsize = format_size(info.get("virtual-size"))
-        backing = info.get("backing-filename")
-
-    vm_entry = {
+    accel_val = get_default_accel() if parsed.accel == "auto" else parsed.accel
+    vm_spec = {
         "name": name,
-        "arch": parsed.arch,
-        "os": parsed.os,
         "disk": disk_path,
-        "format": fmt,
-        "virtual_size": vsize,
-        "backing_file": os.path.abspath(backing) if backing else None,
-        "memory": parsed.memory,
+        "os": parsed.os,
+        "arch": parsed.arch,
         "cpus": parsed.cpus,
-        "accel": parsed.accel,
-        "description": parsed.description,
-        "status": "stopped",
+        "memory": parsed.memory,
+        "accel": accel_val,
+        "ssh_port": parsed.ssh_port,
+        "rdp_port": parsed.rdp_port,
         "extra_args": parsed.extra_args,
+        "description": parsed.description,
         "created_at": get_utc_iso(),
         "updated_at": get_utc_iso()
     }
 
-    data["vms"][name] = vm_entry
+    data["vms"][name] = vm_spec
     save_registry(data)
-    print(f"[INFO] Imported VM '{name}' from {disk_path} ({vsize} {fmt}).")
+    print(f"[INFO] Imported and registered VM '{name}' ({disk_path}).")
     sys.exit(0)
 
 elif action == "rename":
@@ -366,13 +523,18 @@ elif action == "rename":
         print(f"[ERROR] VM '{new_name}' already exists in registry.", file=sys.stderr)
         sys.exit(3)
 
+    # Check if old VM is running
+    rt = probe_vm_runtime(old_name)
+    if rt["is_running"]:
+        print(f"[ERROR] Cannot rename VM '{old_name}' while it is running (PID: {rt['pid']}). Please stop it first.", file=sys.stderr)
+        sys.exit(1)
+
     vm = data["vms"][old_name]
     old_disk = vm.get("disk", "")
     new_disk = old_disk
 
     should_rename_disk = parsed.rename_disk
     if should_rename_disk is None:
-        # Default to renaming disk if inside images_dir or named after VM
         if old_disk and (images_dir in old_disk or old_name in os.path.basename(old_disk)):
             should_rename_disk = True
         else:
@@ -388,6 +550,15 @@ elif action == "rename":
         except Exception as e:
             print(f"[ERROR] Failed to move disk file: {e}", file=sys.stderr)
             sys.exit(1)
+
+    # Rename nvram vars file if present
+    old_vars = os.path.join(images_dir, f"{old_name}_vars.fd")
+    new_vars = os.path.join(images_dir, f"{new_name}_vars.fd")
+    if os.path.exists(old_vars):
+        try:
+            shutil.move(old_vars, new_vars)
+        except Exception:
+            pass
 
     vm["name"] = new_name
     vm["disk"] = new_disk
@@ -426,12 +597,10 @@ elif action == "resize":
         print(f"[ERROR] qemu-img resize failed with code {e.returncode}.", file=sys.stderr)
         sys.exit(1)
 
-    info = run_qemu_img_info(disk_path)
-    if info:
-        vm["virtual_size"] = format_size(info.get("virtual-size"))
     vm["updated_at"] = get_utc_iso()
     save_registry(data)
-    print(f"[INFO] Resized VM '{name}' disk to {vm.get('virtual_size')}.")
+    disk_info = probe_disk_info(disk_path)
+    print(f"[INFO] Resized VM '{name}' disk to {disk_info['virtual_size']}.")
     sys.exit(0)
 
 elif action == "clone":
@@ -470,14 +639,10 @@ elif action == "clone":
     os.makedirs(os.path.dirname(target_disk), exist_ok=True)
 
     if parsed.full:
-        # Full copy via convert
         cmd = ["qemu-img", "convert", "-O", "qcow2", src_disk, target_disk]
-        backing_ref = None
-        clone_type = "Full clone"
+        clone_type = "Full standalone clone"
     else:
-        # Linked copy-on-write overlay
         cmd = ["qemu-img", "create", "-f", "qcow2", "-b", src_disk, "-F", "qcow2", target_disk]
-        backing_ref = src_disk
         clone_type = "Linked overlay clone"
 
     try:
@@ -487,30 +652,31 @@ elif action == "clone":
         print(f"[ERROR] qemu-img failed during clone: code {e.returncode}.", file=sys.stderr)
         sys.exit(1)
 
-    info = run_qemu_img_info(target_disk)
-    vsize = format_size(info.get("virtual-size")) if info else src_vm.get("virtual_size")
+    # Pick non-conflicting SSH port for clone
+    existing_ports = [v.get("ssh_port", 2222) for v in data["vms"].values()]
+    new_ssh_port = src_vm.get("ssh_port", 2222) + 1
+    while new_ssh_port in existing_ports:
+        new_ssh_port += 1
 
     new_vm = {
         "name": new_name,
-        "arch": src_vm.get("arch", get_host_arch()),
-        "os": src_vm.get("os", "generic"),
         "disk": target_disk,
-        "format": "qcow2",
-        "virtual_size": vsize,
-        "backing_file": backing_ref,
-        "memory": src_vm.get("memory", "4G"),
+        "os": src_vm.get("os", "generic"),
+        "arch": src_vm.get("arch", get_host_arch()),
         "cpus": src_vm.get("cpus", 2),
-        "accel": src_vm.get("accel", "hvf"),
-        "description": parsed.description or f"Clone of {src_name}",
-        "status": "stopped",
+        "memory": src_vm.get("memory", "4G"),
+        "accel": src_vm.get("accel", get_default_accel()),
+        "ssh_port": new_ssh_port,
+        "rdp_port": src_vm.get("rdp_port", 3389) + 1,
         "extra_args": src_vm.get("extra_args", ""),
+        "description": parsed.description or f"Clone of {src_name}",
         "created_at": get_utc_iso(),
         "updated_at": get_utc_iso()
     }
 
     data["vms"][new_name] = new_vm
     save_registry(data)
-    print(f"[INFO] {clone_type} '{new_name}' created from '{src_name}'.")
+    print(f"[INFO] {clone_type} '{new_name}' created from '{src_name}' (SSH port: {new_ssh_port}).")
     sys.exit(0)
 
 elif action == "delete":
@@ -527,6 +693,19 @@ elif action == "delete":
         print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
         sys.exit(2)
 
+    # If running, stop or error
+    rt = probe_vm_runtime(name, data["vms"][name].get("disk"))
+    if rt["is_running"]:
+        if parsed.force:
+            print(f"[INFO] VM '{name}' is running (PID {rt['pid']}). Terminating...")
+            try:
+                os.kill(rt["pid"], signal.SIGKILL)
+            except Exception:
+                pass
+        else:
+            print(f"[ERROR] VM '{name}' is currently running (PID: {rt['pid']}). Stop it first or pass --force.", file=sys.stderr)
+            sys.exit(1)
+
     vm = data["vms"][name]
     disk_path = vm.get("disk", "")
 
@@ -537,13 +716,208 @@ elif action == "delete":
         except Exception as e:
             print(f"[WARN] Could not remove disk file: {e}", file=sys.stderr)
 
+    # Clean up associated vars and pid files
+    vars_file = os.path.join(images_dir, f"{name}_vars.fd")
+    if os.path.exists(vars_file):
+        try: os.remove(vars_file)
+        except Exception: pass
+
+    pid_file = get_pid_file_path(name)
+    if os.path.exists(pid_file):
+        try: os.remove(pid_file)
+        except Exception: pass
+
     del data["vms"][name]
     save_registry(data)
-    print(f"[INFO] Deleted VM '{name}' from registry.")
+    print(f"[INFO] Deleted VM '{name}' from inventory.")
     sys.exit(0)
 
-elif action == "inspect":
-    parser = argparse.ArgumentParser(prog="manage-vms inspect")
+elif action == "start":
+    parser = argparse.ArgumentParser(prog="manage-vms start")
+    parser.add_argument("name")
+    parser.add_argument("-d", "--daemon", "--background", dest="daemon", action="store_true")
+    parser.add_argument("--display", default="default", choices=["default", "cocoa", "gtk", "vnc", "none"])
+    parser.add_argument("--ssh-port", type=int, default=None)
+    parser.add_argument("--rdp-port", type=int, default=None)
+    parser.add_argument("--memory", default=None)
+    parser.add_argument("--cpus", type=int, default=None)
+    parser.add_argument("--extra-args", default="")
+    parser.add_argument("--dry-run", action="store_true")
+
+    parsed = parser.parse_args(args)
+    data = load_registry()
+    name = parsed.name.strip()
+
+    if name not in data["vms"]:
+        print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+
+    vm = data["vms"][name]
+    disk_path = vm.get("disk", "")
+    if not disk_path or not os.path.exists(disk_path):
+        print(f"[ERROR] Disk image for VM '{name}' not found: {disk_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Pre-check if already running
+    rt = probe_vm_runtime(name, disk_path)
+    if rt["is_running"]:
+        print(f"[WARN] VM '{name}' is already running (PID: {rt['pid']}).")
+        sys.exit(0)
+
+    arch = vm.get("arch", get_host_arch())
+    qemu_bin = f"qemu-system-{arch}"
+    if not shutil.which(qemu_bin):
+        print(f"[ERROR] Emulator binary '{qemu_bin}' not found in PATH.", file=sys.stderr)
+        sys.exit(1)
+
+    memory = parsed.memory or vm.get("memory", "4G")
+    cpus = str(parsed.cpus or vm.get("cpus", 2))
+    accel = vm.get("accel", get_default_accel())
+    ssh_p = parsed.ssh_port or vm.get("ssh_port", 2222)
+    rdp_p = parsed.rdp_port or vm.get("rdp_port", 3389)
+
+    # Assemble base command
+    cmd = [
+        qemu_bin,
+        "-accel", accel,
+        "-cpu", "host" if accel in ["hvf", "kvm", "whpx"] else "max",
+        "-smp", str(cpus),
+        "-m", str(memory),
+        "-device", "qemu-xhci,id=xhci",
+        "-device", "usb-kbd",
+        "-device", "usb-tablet",
+        "-drive", f"file={disk_path},if=none,id=hd0,format=qcow2",
+        "-device", "nvme,drive=hd0,serial=nvme0,bootindex=0",
+        "-netdev", f"user,id=net0,hostfwd=tcp::{ssh_p}-:22,hostfwd=tcp::{rdp_p}-:3389",
+        "-device", "virtio-net-pci,netdev=net0"
+    ]
+
+    # Arch-specific machine & firmware
+    if arch == "aarch64":
+        cmd.extend(["-M", "virt,highmem=on", "-device", "ramfb"])
+        # Check for UEFI vars
+        vars_file = os.path.join(images_dir, f"{name}_vars.fd")
+        edk2_code = None
+        for p in ["/opt/homebrew/share/qemu/edk2-aarch64-code.fd", "/usr/share/qemu/edk2-aarch64-code.fd", "/usr/local/share/qemu/edk2-aarch64-code.fd"]:
+            if os.path.exists(p):
+                edk2_code = p
+                break
+        if edk2_code:
+            cmd.extend(["-drive", f"if=pflash,format=raw,readonly=on,file={edk2_code}"])
+            if os.path.exists(vars_file):
+                cmd.extend(["-drive", f"if=pflash,format=raw,file={vars_file}"])
+    else:
+        cmd.extend(["-M", "q35,smm=on", "-device", "virtio-vga"])
+        vars_file = os.path.join(images_dir, f"{name}_vars.fd")
+        edk2_code = None
+        for p in ["/opt/homebrew/share/qemu/edk2-x86_64-code.fd", "/usr/share/qemu/edk2-x86_64-code.fd", "/usr/local/share/qemu/edk2-x86_64-code.fd"]:
+            if os.path.exists(p):
+                edk2_code = p
+                break
+        if edk2_code:
+            cmd.extend(["-drive", f"if=pflash,format=raw,readonly=on,file={edk2_code}"])
+            if os.path.exists(vars_file):
+                cmd.extend(["-drive", f"if=pflash,format=raw,file={vars_file}"])
+
+    # Display configuration
+    disp = parsed.display
+    if disp == "none":
+        cmd.extend(["-display", "none"])
+    elif disp == "vnc":
+        cmd.extend(["-display", "none", "-vnc", ":0"])
+    elif disp == "cocoa":
+        cmd.extend(["-display", "cocoa,show-cursor=on"])
+    elif disp == "gtk":
+        cmd.extend(["-display", "gtk,show-cursor=on"])
+    else:
+        cmd.extend(["-display", "default,show-cursor=on"])
+
+    # Extra arguments from spec or cli
+    combined_extra = f"{vm.get('extra_args', '')} {parsed.extra_args}".strip()
+    if combined_extra:
+        cmd.extend(combined_extra.split())
+
+    if parsed.dry_run:
+        print("[INFO] Assembled QEMU launch command (dry-run):")
+        print(f"\n    {' '.join(cmd)}\n")
+        sys.exit(0)
+
+    print(f"[INFO] Starting VM '{name}' ({arch}, {memory} RAM, {cpus} CPUs, SSH: localhost:{ssh_p})...")
+
+    pid_file = get_pid_file_path(name)
+
+    if parsed.daemon or disp == "none":
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
+        )
+        with open(pid_file, "w") as f:
+            f.write(f"{proc.pid}\n")
+        print(f"[INFO] VM '{name}' started in background (PID: {proc.pid}).")
+        sys.exit(0)
+    else:
+        # Foreground execution
+        try:
+            proc = subprocess.Popen(cmd)
+            with open(pid_file, "w") as f:
+                f.write(f"{proc.pid}\n")
+            proc.wait()
+        finally:
+            if os.path.exists(pid_file):
+                try: os.remove(pid_file)
+                except Exception: pass
+        sys.exit(0)
+
+elif action == "stop":
+    parser = argparse.ArgumentParser(prog="manage-vms stop")
+    parser.add_argument("name")
+    parser.add_argument("-f", "--force", action="store_true")
+
+    parsed = parser.parse_args(args)
+    name = parsed.name.strip()
+    data = load_registry()
+
+    if name not in data["vms"]:
+        print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+
+    rt = probe_vm_runtime(name, data["vms"][name].get("disk"))
+    if not rt["is_running"] or not rt["pid"]:
+        print(f"[INFO] VM '{name}' is already stopped.")
+        sys.exit(0)
+
+    pid = rt["pid"]
+    sig = signal.SIGKILL if parsed.force else signal.SIGTERM
+    action_word = "Killing" if parsed.force else "Gracefully stopping"
+
+    print(f"[INFO] {action_word} VM '{name}' (PID: {pid})...")
+    try:
+        os.kill(pid, sig)
+        # Wait up to 5 seconds for termination
+        for _ in range(25):
+            if not is_process_running(pid):
+                break
+            time.sleep(0.2)
+        if is_process_running(pid) and not parsed.force:
+            print("[WARN] VM did not terminate within timeout. Forcing termination...")
+            os.kill(pid, signal.SIGKILL)
+    except Exception as e:
+        print(f"[ERROR] Could not send signal to process: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    pid_file = get_pid_file_path(name)
+    if os.path.exists(pid_file):
+        try: os.remove(pid_file)
+        except Exception: pass
+
+    print(f"[INFO] VM '{name}' is now stopped.")
+    sys.exit(0)
+
+elif action == "status":
+    parser = argparse.ArgumentParser(prog="manage-vms status")
     parser.add_argument("name")
     parser.add_argument("-j", "--json", action="store_true")
     parsed = parser.parse_args(args)
@@ -555,88 +929,100 @@ elif action == "inspect":
         print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
         sys.exit(2)
 
-    vm = data["vms"][name]
-    disk_path = vm.get("disk", "")
-    disk_exists = os.path.exists(disk_path) if disk_path else False
-    disk_info = run_qemu_img_info(disk_path) if disk_exists else None
-
-    actual_file_size = format_size(os.path.getsize(disk_path)) if disk_exists else "missing"
-
-    combined = {
-        "vm": vm,
-        "disk_status": {
-            "path": disk_path,
-            "exists": disk_exists,
-            "actual_size_on_disk": actual_file_size,
-            "qemu_info": disk_info
-        }
-    }
+    info = synthesize_vm_info(data["vms"][name])
 
     if parsed.json:
-        print(json.dumps(combined, indent=2))
+        print(json.dumps(info, indent=2))
         sys.exit(0)
 
-    print(f"VM Name:           {vm.get('name')}")
-    print(f"Architecture:      {vm.get('arch')}")
-    print(f"OS:                {vm.get('os')}")
-    print(f"CPUs:              {vm.get('cpus')}")
-    print(f"Memory:            {vm.get('memory')}")
-    print(f"Acceleration:      {vm.get('accel')}")
-    print(f"Status:            {vm.get('status')}")
-    print(f"Disk Path:         {disk_path or '<none>'}")
-    print(f"Disk File Exists:  {'Yes' if disk_exists else 'NO (Missing)'}")
-    print(f"Actual Disk Size:  {actual_file_size}")
-    print(f"Virtual Disk Size: {vm.get('virtual_size', 'unknown')}")
-    print(f"Format:            {vm.get('format', 'unknown')}")
-    print(f"Backing File:      {vm.get('backing_file') or '<none>'}")
-    print(f"Description:       {vm.get('description') or '<none>'}")
-    print(f"Extra Args:        {vm.get('extra_args') or '<none>'}")
-    print(f"Created:           {vm.get('created_at')}")
-    print(f"Updated:           {vm.get('updated_at')}")
+    rt = info["runtime"]
+    disk = info["disk"]
+    status_label = f"\033[32mRUNNING (PID: {rt['pid']})\033[0m" if rt["is_running"] else "\033[33mSTOPPED\033[0m"
+
+    print(f"VM Name:         {info['name']}")
+    print(f"Status:          {status_label}")
+    print(f"SSH Reachable:   {'Yes (localhost:' + str(info['ssh_port']) + ')' if rt.get('ssh_ready') else 'No / Port closed'}")
+    print(f"Architecture:    {info['arch']}")
+    print(f"Hardware:        {info['cpus']} vCPUs, {info['memory']} RAM")
+    print(f"Disk Image:      {disk['path']}")
+    print(f"Disk Exists:     {'Yes' if disk['exists'] else 'NO (Missing)'}")
+    print(f"Disk Size:       {disk['actual_size']} (virtual: {disk['virtual_size']}, fmt: {disk['format']})")
+    if disk.get("snapshots"):
+        print(f"Snapshots:       {', '.join(disk['snapshots'])}")
     sys.exit(0)
 
-elif action == "sync":
-    parser = argparse.ArgumentParser(prog="manage-vms sync")
-    parser.add_argument("--prune", action="store_true")
-    parsed = parser.parse_args(args)
+elif action == "snapshot":
+    if len(args) < 2:
+        print("[ERROR] Usage: manage-vms.sh snapshot <name> <create|list|rollback|delete> [snapname]", file=sys.stderr)
+        sys.exit(1)
 
+    name = args[0].strip()
+    subaction = args[1].strip().lower()
     data = load_registry()
-    vms = data["vms"]
-    changes = 0
-    to_delete = []
 
-    print(f"[INFO] Auditing {len(vms)} registered VM(s)...")
+    if name not in data["vms"]:
+        print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
 
-    for name, vm in vms.items():
-        disk = vm.get("disk", "")
-        if not disk or not os.path.exists(disk):
-            print(f"  [WARN] VM '{name}': Disk missing ({disk})")
-            if parsed.prune:
-                to_delete.append(name)
+    disk_path = data["vms"][name].get("disk", "")
+    if not disk_path or not os.path.exists(disk_path):
+        print(f"[ERROR] Disk image for VM '{name}' does not exist: {disk_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if subaction in ["create", "add", "take"]:
+        if len(args) < 3:
+            print("[ERROR] Usage: manage-vms.sh snapshot <name> create <snapname>", file=sys.stderr)
+            sys.exit(1)
+        snapname = args[2].strip()
+        cmd = ["qemu-img", "snapshot", "-c", snapname, disk_path]
+        print(f"[INFO] Creating snapshot '{snapname}' on VM '{name}'...")
+        subprocess.run(cmd, check=True)
+        print(f"[INFO] Snapshot '{snapname}' created successfully.")
+        sys.exit(0)
+
+    elif subaction in ["list", "ls"]:
+        info = probe_disk_info(disk_path)
+        if "-j" in args or "--json" in args:
+            print(json.dumps(info.get("snapshots", []), indent=2))
         else:
-            info = run_qemu_img_info(disk)
-            if info:
-                vsize = format_size(info.get("virtual-size"))
-                fmt = info.get("format", vm.get("format"))
-                backing = info.get("backing-filename")
-                if vm.get("virtual_size") != vsize or vm.get("format") != fmt:
-                    vm["virtual_size"] = vsize
-                    vm["format"] = fmt
-                    vm["updated_at"] = get_utc_iso()
-                    changes += 1
+            snaps = info.get("snapshots", [])
+            if not snaps:
+                print(f"No internal snapshots found for VM '{name}'.")
+            else:
+                print(f"Snapshots for VM '{name}':")
+                for s in snaps:
+                    print(f"  • {s}")
+        sys.exit(0)
 
-    if to_delete:
-        for name in to_delete:
-            del data["vms"][name]
-            changes += 1
-            print(f"  [INFO] Pruned VM '{name}' from registry.")
+    elif subaction in ["rollback", "apply", "revert"]:
+        if len(args) < 3:
+            print("[ERROR] Usage: manage-vms.sh snapshot <name> rollback <snapname>", file=sys.stderr)
+            sys.exit(1)
+        snapname = args[2].strip()
+        rt = probe_vm_runtime(name, disk_path)
+        if rt["is_running"]:
+            print(f"[ERROR] Cannot rollback snapshot while VM is running (PID: {rt['pid']}). Stop it first.", file=sys.stderr)
+            sys.exit(1)
+        cmd = ["qemu-img", "snapshot", "-a", snapname, disk_path]
+        print(f"[INFO] Rolling back VM '{name}' to snapshot '{snapname}'...")
+        subprocess.run(cmd, check=True)
+        print(f"[INFO] Rollback to snapshot '{snapname}' complete.")
+        sys.exit(0)
 
-    if changes > 0:
-        save_registry(data)
-        print(f"[INFO] Reconciled registry: {changes} update(s) saved.")
+    elif subaction in ["delete", "rm"]:
+        if len(args) < 3:
+            print("[ERROR] Usage: manage-vms.sh snapshot <name> delete <snapname>", file=sys.stderr)
+            sys.exit(1)
+        snapname = args[2].strip()
+        cmd = ["qemu-img", "snapshot", "-d", snapname, disk_path]
+        print(f"[INFO] Deleting snapshot '{snapname}' from VM '{name}'...")
+        subprocess.run(cmd, check=True)
+        print(f"[INFO] Deleted snapshot '{snapname}'.")
+        sys.exit(0)
+
     else:
-        print("[INFO] Registry is in sync with filesystem.")
-    sys.exit(0)
+        print(f"[ERROR] Unknown snapshot action: {subaction}", file=sys.stderr)
+        sys.exit(1)
 
 elif action == "list":
     parser = argparse.ArgumentParser(prog="manage-vms list")
@@ -647,34 +1033,43 @@ elif action == "list":
     data = load_registry()
     vms = data["vms"]
 
-    if parsed.json:
-        print(json.dumps(list(vms.values()), indent=2))
-        sys.exit(0)
-
     if parsed.quiet:
         for name in sorted(vms.keys()):
             print(name)
         sys.exit(0)
 
-    if not vms:
-        print("No virtual machines registered. Run 'manage-vms.sh create <name> --size <size>' to create one.")
+    synthesized_list = [synthesize_vm_info(spec) for spec in vms.values()]
+
+    if parsed.json:
+        print(json.dumps(synthesized_list, indent=2))
         sys.exit(0)
 
-    headers = ["NAME", "ARCH", "CPUS", "MEM", "VSIZE", "FORMAT", "STATUS", "DISK"]
+    if not vms:
+        print("No virtual machines registered in inventory. Run 'manage-vms.sh create <name> --size <size>' to create one.")
+        sys.exit(0)
+
+    headers = ["NAME", "ARCH", "CPUS", "MEM", "VSIZE", "STATUS", "SSH", "DISK"]
     rows = []
-    for name in sorted(vms.keys()):
-        v = vms[name]
-        disk_str = v.get("disk", "")
-        if len(disk_str) > 30:
-            disk_str = "..." + disk_str[-27:]
+    for info in sorted(synthesized_list, key=lambda x: x["name"]):
+        rt = info["runtime"]
+        status_text = f"RUNNING ({rt['pid']})" if rt["is_running"] else "STOPPED"
+        if not info["disk"]["exists"]:
+            status_text = "MISSING DISK"
+
+        disk_str = info["disk"]["path"]
+        if len(disk_str) > 28:
+            disk_str = "..." + disk_str[-25:]
+
+        ssh_label = f":{info['ssh_port']}" if rt["is_running"] else f":{info['ssh_port']} (off)"
+
         rows.append([
-            v.get("name", name),
-            v.get("arch", "unknown"),
-            str(v.get("cpus", 2)),
-            v.get("memory", "4G"),
-            v.get("virtual_size", "unknown"),
-            v.get("format", "qcow2"),
-            v.get("status", "stopped"),
+            info["name"],
+            info["arch"],
+            str(info["cpus"]),
+            info["memory"],
+            info["disk"]["virtual_size"],
+            status_text,
+            ssh_label,
             disk_str or "<none>"
         ])
 
@@ -691,6 +1086,52 @@ elif action == "list":
 
     sys.exit(0)
 
+elif action == "inspect":
+    parser = argparse.ArgumentParser(prog="manage-vms inspect")
+    parser.add_argument("name")
+    parser.add_argument("-j", "--json", action="store_true")
+    parsed = parser.parse_args(args)
+
+    data = load_registry()
+    name = parsed.name.strip()
+
+    if name not in data["vms"]:
+        print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+
+    info = synthesize_vm_info(data["vms"][name])
+
+    if parsed.json:
+        print(json.dumps(info, indent=2))
+        sys.exit(0)
+
+    rt = info["runtime"]
+    disk = info["disk"]
+    status_label = f"RUNNING (PID: {rt['pid']})" if rt["is_running"] else "STOPPED"
+
+    print(f"VM Name:           {info['name']}")
+    print(f"Status:            {status_label}")
+    print(f"Architecture:      {info['arch']}")
+    print(f"OS Profile:        {info['os']}")
+    print(f"Allocated vCPUs:   {info['cpus']}")
+    print(f"Allocated Memory:  {info['memory']}")
+    print(f"Acceleration:      {info['accel']}")
+    print(f"Forwarded SSH:     localhost:{info['ssh_port']} (Ready: {'Yes' if rt['ssh_ready'] else 'No'})")
+    print(f"Forwarded RDP:     localhost:{info['rdp_port']}")
+    print(f"Disk Image:        {disk['path']}")
+    print(f"Disk Exists:       {'Yes' if disk['exists'] else 'NO (Missing)'}")
+    print(f"Actual Disk Size:  {disk['actual_size']}")
+    print(f"Virtual Disk Size: {disk['virtual_size']}")
+    print(f"Disk Format:       {disk['format']}")
+    print(f"Backing File:      {disk['backing_file'] or '<none>'}")
+    if disk.get("snapshots"):
+        print(f"Internal Snaps:    {', '.join(disk['snapshots'])}")
+    print(f"Description:       {info['description'] or '<none>'}")
+    print(f"Extra Args:        {info['extra_args'] or '<none>'}")
+    print(f"Created:           {info['created_at']}")
+    print(f"Updated:           {info['updated_at']}")
+    sys.exit(0)
+
 elif action == "get":
     parser = argparse.ArgumentParser(prog="manage-vms get")
     parser.add_argument("name")
@@ -705,26 +1146,12 @@ elif action == "get":
         sys.exit(2)
 
     vm = data["vms"][name]
-
     if parsed.json:
         print(json.dumps(vm, indent=2))
         sys.exit(0)
 
-    print(f"Name:             {vm.get('name')}")
-    print(f"Architecture:     {vm.get('arch')}")
-    print(f"OS:               {vm.get('os')}")
-    print(f"CPUs:             {vm.get('cpus')}")
-    print(f"Memory:           {vm.get('memory')}")
-    print(f"Acceleration:     {vm.get('accel')}")
-    print(f"Format:           {vm.get('format')}")
-    print(f"Virtual Size:     {vm.get('virtual_size')}")
-    print(f"Backing File:     {vm.get('backing_file') or '<none>'}")
-    print(f"Status:           {vm.get('status')}")
-    print(f"Disk Image:       {vm.get('disk') or '<none>'}")
-    print(f"Description:      {vm.get('description') or '<none>'}")
-    print(f"Extra Args:       {vm.get('extra_args') or '<none>'}")
-    print(f"Created At:       {vm.get('created_at')}")
-    print(f"Updated At:       {vm.get('updated_at')}")
+    for k, v in vm.items():
+        print(f"{k:<18}: {v}")
     sys.exit(0)
 
 elif action == "update":
@@ -736,7 +1163,8 @@ elif action == "update":
     parser.add_argument("--cpus", type=int, default=None)
     parser.add_argument("--os", default=None)
     parser.add_argument("--accel", default=None)
-    parser.add_argument("--status", default=None)
+    parser.add_argument("--ssh-port", type=int, default=None)
+    parser.add_argument("--rdp-port", type=int, default=None)
     parser.add_argument("--description", default=None)
     parser.add_argument("--extra-args", default=None)
 
@@ -753,10 +1181,6 @@ elif action == "update":
 
     if parsed.disk is not None:
         vm["disk"] = os.path.abspath(parsed.disk) if parsed.disk else ""
-        info = run_qemu_img_info(vm["disk"])
-        if info:
-            vm["format"] = info.get("format", vm.get("format"))
-            vm["virtual_size"] = format_size(info.get("virtual-size"))
         updated_fields.append("disk")
     if parsed.arch is not None:
         vm["arch"] = parsed.arch
@@ -773,9 +1197,12 @@ elif action == "update":
     if parsed.accel is not None:
         vm["accel"] = parsed.accel
         updated_fields.append("accel")
-    if parsed.status is not None:
-        vm["status"] = parsed.status
-        updated_fields.append("status")
+    if parsed.ssh_port is not None:
+        vm["ssh_port"] = parsed.ssh_port
+        updated_fields.append("ssh_port")
+    if parsed.rdp_port is not None:
+        vm["rdp_port"] = parsed.rdp_port
+        updated_fields.append("rdp_port")
     if parsed.description is not None:
         vm["description"] = parsed.description
         updated_fields.append("description")
@@ -785,7 +1212,50 @@ elif action == "update":
 
     vm["updated_at"] = get_utc_iso()
     save_registry(data)
-    print(f"[INFO] Updated VM '{name}' ({', '.join(updated_fields) if updated_fields else 'no changes'}).")
+    print(f"[INFO] Updated VM '{name}' specification ({', '.join(updated_fields) if updated_fields else 'no changes'}).")
+    sys.exit(0)
+
+elif action == "sync":
+    parser = argparse.ArgumentParser(prog="manage-vms sync")
+    parser.add_argument("--prune", action="store_true")
+    parsed = parser.parse_args(args)
+
+    data = load_registry()
+    vms = data["vms"]
+    changes = 0
+    to_delete = []
+
+    print(f"[INFO] Auditing {len(vms)} registered VM(s) against filesystem...")
+
+    for name, vm in vms.items():
+        disk = vm.get("disk", "")
+        if not disk or not os.path.exists(disk):
+            print(f"  [WARN] VM '{name}': Disk missing ({disk})")
+            if parsed.prune:
+                to_delete.append(name)
+        # Clean stale pid files
+        pid_file = get_pid_file_path(name)
+        if os.path.exists(pid_file):
+            try:
+                with open(pid_file, "r") as f:
+                    c = f.read().strip()
+                    if not c.isdigit() or not is_process_running(int(c)):
+                        os.remove(pid_file)
+                        print(f"  [INFO] Cleaned stale PID file for '{name}'.")
+            except Exception:
+                pass
+
+    if to_delete:
+        for name in to_delete:
+            del data["vms"][name]
+            changes += 1
+            print(f"  [INFO] Pruned VM '{name}' from inventory.")
+
+    if changes > 0:
+        save_registry(data)
+        print(f"[INFO] Reconciled inventory: {changes} change(s) saved.")
+    else:
+        print("[INFO] Inventory is in sync with filesystem.")
     sys.exit(0)
 
 else:
@@ -821,6 +1291,18 @@ case "$COMMAND" in
     ;;
   delete|rm|destroy|remove|unregister)
     run_py_gateway "delete" "$@"
+    ;;
+  start|run|boot)
+    run_py_gateway "start" "$@"
+    ;;
+  stop|halt|kill|shutdown)
+    run_py_gateway "stop" "$@"
+    ;;
+  status)
+    run_py_gateway "status" "$@"
+    ;;
+  snapshot|snap)
+    run_py_gateway "snapshot" "$@"
     ;;
   inspect|info)
     run_py_gateway "inspect" "$@"
