@@ -1,12 +1,15 @@
 <#
 .SYNOPSIS
-    Detects whether QEMU is installed on the local Windows machine and provides automated
-    or interactive wizard-based installation and WHPX acceleration configuration.
+    Sanity checks the vm-stack environment on Windows:
+    1. Ensures ~/.config/vm-stack/ directory exists.
+    2. Detects QEMU installation and target emulator binaries.
+    3. Verifies Windows Hypervisor Platform (WHPX) acceleration.
+    4. Provides an interactive multi-stage wizard for privileged operations.
 .DESCRIPTION
     Zero external dependencies (pure PowerShell). Supports WinGet, Chocolatey, Scoop, and direct installer download.
     Includes an interactive multi-stage setup wizard for steps requiring elevated (Administrator) privileges.
 .PARAMETER Check
-    Check QEMU status only without installing (Exit: 0=found, 2=missing).
+    Check status only without installing (Exit: 0=found, 2=missing).
 .PARAMETER Wizard
     Launch interactive multi-stage setup wizard for privileged operations.
 .PARAMETER Target
@@ -18,9 +21,9 @@
 .PARAMETER Quiet
     Suppress non-essential output.
 .EXAMPLE
-    .\ensure-qemu.ps1 -Check
-    .\ensure-qemu.ps1 -Wizard
-    .\ensure-qemu.ps1 -Json
+    .\sanity-check.ps1 -Check
+    .\sanity-check.ps1 -Wizard
+    .\sanity-check.ps1 -Json
 #>
 
 [CmdletBinding()]
@@ -62,6 +65,22 @@ function Write-ErrorLog([string]$message) {
     if (-not $Json) {
         Write-Host "[ERROR] $message" -ForegroundColor Red
     }
+}
+
+# ──────────────────────────────────────────────────────────────────────────
+# Configuration Directory (~/.config/vm-stack/ or Windows equivalent)
+# ──────────────────────────────────────────────────────────────────────────
+
+$ConfigDir = if ($env:XDG_CONFIG_HOME) {
+    Join-Path $env:XDG_CONFIG_HOME "vm-stack"
+} elseif ($env:USERPROFILE) {
+    Join-Path $env:USERPROFILE ".config\vm-stack"
+} else {
+    Join-Path $env:APPDATA "vm-stack"
+}
+
+if (-not (Test-Path $ConfigDir)) {
+    New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
 }
 
 # Standard installation paths for QEMU on Windows
@@ -184,7 +203,6 @@ function Check-AccelerationStatus {
     }
 
     if (-not $IsInstalled -and -not (Get-Command scoop.exe -ErrorAction SilentlyContinue)) {
-        # System-level installers (winget/choco/direct) typically require elevation
         if (-not $IsAdmin) {
             $script:PrivilegeRequired = $true
         }
@@ -219,8 +237,8 @@ function Show-Banner([string]$title) {
     Write-Host "  $title" -ForegroundColor Cyan
     Write-Host "  $Global:TotalStages stage(s)" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  This setup wizard walks you through verifying, installing, and" -ForegroundColor DarkGray
-    Write-Host "  configuring QEMU and Windows Hypervisor Platform (WHPX) acceleration." -ForegroundColor DarkGray
+    Write-Host "  This setup wizard walks you through verifying the vm-stack environment," -ForegroundColor DarkGray
+    Write-Host "  installing QEMU, and configuring Windows Hypervisor Platform (WHPX)." -ForegroundColor DarkGray
     Write-Host "  Privileged steps will prompt for confirmation before execution." -ForegroundColor DarkGray
     Write-Host ""
     Pause-Prompt "Press Enter to start..."
@@ -254,7 +272,7 @@ function Confirm-Prompt([string]$question) {
 function Show-Summary {
     Clear-Screen
     Write-Host ""
-    Write-Host "  ✓ Setup Complete" -ForegroundColor Green
+    Write-Host "  ✓ Sanity Check & Setup Complete" -ForegroundColor Green
     Write-Host ""
     if ($Global:ActionsDone.Count -gt 0) {
         Write-Note "Actions completed:"
@@ -273,6 +291,7 @@ function Show-Summary {
         Write-Host ""
     }
 
+    Write-Host "  Config Directory: $ConfigDir"
     Write-Host "  Host OS: Windows"
     Write-Host "  QEMU Installed: $(if ($IsInstalled) { "Yes (v$Version)" } else { "No" })"
     Write-Host "  Target Emulator: $(if ($FoundBinaries.ContainsKey($ReqBinary)) { $FoundBinaries[$ReqBinary] } else { "Not found" })"
@@ -324,6 +343,8 @@ function Install-QemuWindows {
 }
 
 function Run-Wizard {
+    $Global:ActionsDone.Add("Initialized config directory: $ConfigDir")
+
     Check-QemuStatus
     Check-AccelerationStatus
 
@@ -334,7 +355,7 @@ function Run-Wizard {
     if ($needInstall) { $Global:TotalStages++ }
     if ($needWhpx) { $Global:TotalStages++ }
 
-    Show-Banner "QEMU Virtualization Setup Wizard (Windows)"
+    Show-Banner "vm-stack Sanity Check & Setup Wizard (Windows)"
 
     # Stage: Package Installation
     if ($needInstall) {
@@ -467,6 +488,8 @@ if ($Wizard) {
 if ($Check) {
     if ($Json) {
         [PSCustomObject]@{
+            config_dir         = $ConfigDir
+            config_dir_ready   = $true
             installed          = $IsInstalled
             target_arch        = $Target
             version            = $Version
@@ -474,7 +497,7 @@ if ($Check) {
             package_managers   = $AvailablePkgMgrs
             privilege_required = $PrivilegeRequired
             wizard_recommended = $PrivilegeRequired
-            wizard_command     = "powershell -ExecutionPolicy Bypass -File .\scripts\ensure-qemu.ps1 -Wizard"
+            wizard_command     = "powershell -ExecutionPolicy Bypass -File .\scripts\sanity-check.ps1 -Wizard"
             binaries           = $FoundBinaries
             acceleration       = @{
                 type       = $AccelType
@@ -484,6 +507,7 @@ if ($Check) {
             }
         } | ConvertTo-Json -Depth 4
     } else {
+        Write-InfoLog "Config directory: $ConfigDir (ready)"
         if ($IsInstalled) {
             Write-InfoLog "QEMU is installed (Version: $Version)."
             Write-InfoLog "Target binary: $($FoundBinaries[$ReqBinary])"
@@ -492,7 +516,7 @@ if ($Check) {
             Write-WarnLog "QEMU (target: $Target) is not installed on this Windows system."
             if ($PrivilegeRequired) {
                 Write-WarnLog "Installation or WHPX configuration requires elevated privileges."
-                Write-InfoLog "Run the interactive wizard: powershell -ExecutionPolicy Bypass -File .\scripts\ensure-qemu.ps1 -Wizard"
+                Write-InfoLog "Run the interactive wizard: powershell -ExecutionPolicy Bypass -File .\scripts\sanity-check.ps1 -Wizard"
             }
         }
     }
@@ -522,13 +546,15 @@ if (-not $IsInstalled) {
         Write-InfoLog "Successfully installed QEMU."
     } else {
         Write-ErrorLog "Installation completed but QEMU executable was not found."
-        Write-InfoLog "Launch the interactive setup wizard: powershell -ExecutionPolicy Bypass -File .\scripts\ensure-qemu.ps1 -Wizard"
+        Write-InfoLog "Launch the interactive setup wizard: powershell -ExecutionPolicy Bypass -File .\scripts\sanity-check.ps1 -Wizard"
         exit 1
     }
 }
 
 if ($Json) {
     [PSCustomObject]@{
+        config_dir         = $ConfigDir
+        config_dir_ready   = $true
         installed          = $IsInstalled
         target_arch        = $Target
         version            = $Version
@@ -536,7 +562,7 @@ if ($Json) {
         package_managers   = $AvailablePkgMgrs
         privilege_required = $PrivilegeRequired
         wizard_recommended = $PrivilegeRequired
-        wizard_command     = "powershell -ExecutionPolicy Bypass -File .\scripts\ensure-qemu.ps1 -Wizard"
+        wizard_command     = "powershell -ExecutionPolicy Bypass -File .\scripts\sanity-check.ps1 -Wizard"
         binaries           = $FoundBinaries
         acceleration       = @{
             type       = $AccelType
@@ -546,6 +572,7 @@ if ($Json) {
         }
     } | ConvertTo-Json -Depth 4
 } else {
+    Write-InfoLog "Config directory: $ConfigDir (ready)"
     Write-InfoLog "QEMU is installed and ready to use."
 }
 

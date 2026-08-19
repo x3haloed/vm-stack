@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# ensure-qemu.sh
-# Detects whether QEMU is installed on the local machine and provides automated
-# or interactive wizard-based installation across macOS and Linux distributions.
+# sanity-check.sh
+# Verifies the vm-stack environment:
+# 1. Ensures ~/.config/vm-stack/ directory exists.
+# 2. Detects QEMU installation and target emulator binaries.
+# 3. Verifies virtualization acceleration (KVM, HVF).
+# 4. Provides an interactive multi-stage wizard for privileged operations.
 # ==============================================================================
 
 set -euo pipefail
@@ -49,14 +52,16 @@ log_debug() {
 
 show_help() {
   cat << 'EOF'
-Usage: ensure-qemu.sh [OPTIONS]
+Usage: sanity-check.sh [OPTIONS]
 
-Detects, verifies, and installs QEMU across macOS and Linux distributions.
-Supports non-interactive status checks and an interactive setup wizard for
-operations requiring elevated privileges.
+Sanity checks the vm-stack environment:
+- Ensures ~/.config/vm-stack/ exists
+- Verifies and installs QEMU across macOS and Linux
+- Verifies virtualization acceleration (KVM / HVF)
+- Provides an interactive setup wizard for privileged operations
 
 Options:
-  -c, --check          Check QEMU status only without installing (Exit: 0=found, 2=missing)
+  -c, --check          Check status only without installing (Exit: 0=found, 2=missing)
   -i, --install        Check and install QEMU (non-interactive where possible)
   -w, --wizard         Launch interactive multi-stage setup wizard for privileged operations
   -t, --target <arch>  Target architecture binary to verify (e.g. x86_64, aarch64, arm, all) [default: x86_64]
@@ -66,7 +71,7 @@ Options:
   -h, --help           Show this help message
 
 Exit codes:
-  0 - QEMU is installed and ready
+  0 - Environment and QEMU are ready
   1 - Installation failed or unsupported system
   2 - QEMU is missing (in --check mode)
   3 - Privilege escalation required (run with --wizard in an interactive terminal)
@@ -123,6 +128,31 @@ done
 
 # Expand PATH to include standard binary directories
 export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# ──────────────────────────────────────────────────────────────────────────
+# Configuration Directory Initialization (~/.config/vm-stack/)
+# ──────────────────────────────────────────────────────────────────────────
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vm-stack"
+CONFIG_DIR_READY=0
+CONFIG_DIR_CREATED=0
+
+ensure_config_dir() {
+  if [[ -d "$CONFIG_DIR" ]]; then
+    CONFIG_DIR_READY=1
+  else
+    if mkdir -p "$CONFIG_DIR" 2>/dev/null; then
+      CONFIG_DIR_READY=1
+      CONFIG_DIR_CREATED=1
+      log_debug "Created configuration directory: $CONFIG_DIR"
+    else
+      CONFIG_DIR_READY=0
+      log_debug "Could not create configuration directory: $CONFIG_DIR"
+    fi
+  fi
+}
+
+ensure_config_dir
 
 # ──────────────────────────────────────────────────────────────────────────
 # Detection Routines
@@ -352,8 +382,8 @@ banner() {
   _clear
   printf '\n%s%s  %s%s\n' "$BOLD" "$BLUE" "$1" "$RESET"
   printf '%s  %s stage(s)%s\n\n' "$DIM" "$TOTAL_STAGES" "$RESET"
-  printf '%s  This setup wizard walks you through verifying, installing, and\n' "$DIM"
-  printf '  configuring QEMU and virtualization acceleration on your system.\n'
+  printf '%s  This setup wizard walks you through verifying the vm-stack environment,\n' "$DIM"
+  printf '  installing QEMU, and configuring virtualization acceleration.\n'
   printf '  Privileged steps will prompt for confirmation before execution.%s\n\n' "$RESET"
   pause "Press Enter to start..."
 }
@@ -385,7 +415,7 @@ confirm() {
 
 finish() {
   _clear
-  printf '\n%s%s  ✓ Setup Complete%s\n\n' "$BOLD" "$GREEN" "$RESET"
+  printf '\n%s%s  ✓ Sanity Check & Setup Complete%s\n\n' "$BOLD" "$GREEN" "$RESET"
   if [[ ${#ACTIONS_PERFORMED[@]} -gt 0 ]]; then
     note "Actions completed:"
     for act in "${ACTIONS_PERFORMED[@]}"; do
@@ -403,6 +433,7 @@ finish() {
   fi
 
   # Final status summary
+  printf '  %sConfig Directory:%s %s (%s)\n' "$BOLD" "$RESET" "$CONFIG_DIR" "$([[ "$CONFIG_DIR_READY" -eq 1 ]] && echo "Ready" || echo "Not created")"
   printf '  %sHost OS:%s %s (%s)\n' "$BOLD" "$RESET" "$OS_TYPE" "$DISTRO"
   printf '  %sQEMU Installed:%s %s\n' "$BOLD" "$RESET" "$([[ "$QEMU_INSTALLED" -eq 1 ]] && echo "Yes (v$QEMU_VERSION)" || echo "No")"
   printf '  %sTarget Emulator:%s %s\n' "$BOLD" "$RESET" "$(command -v "qemu-system-$TARGET_ARCH" 2>/dev/null || echo "Not found")"
@@ -427,6 +458,11 @@ get_install_command() {
 }
 
 run_wizard() {
+  ensure_config_dir
+  if [[ "$CONFIG_DIR_READY" -eq 1 ]]; then
+    ACTIONS_PERFORMED+=("Initialized configuration directory ($CONFIG_DIR)")
+  fi
+
   # Recalculate states
   check_qemu_installed
   check_acceleration
@@ -450,7 +486,7 @@ run_wizard() {
   [[ "$need_install" -eq 1 ]] && TOTAL_STAGES=$((TOTAL_STAGES + 1))
   [[ "$need_kvm_perm" -eq 1 || "$need_kvm_module" -eq 1 ]] && TOTAL_STAGES=$((TOTAL_STAGES + 1))
 
-  banner "QEMU Virtualization Setup Wizard"
+  banner "vm-stack Sanity Check & Setup Wizard"
 
   # Stage: Package Installation
   if [[ "$need_install" -eq 1 ]]; then
@@ -622,9 +658,13 @@ output_json() {
   [[ "$ACCEL_ACCESSIBLE" -eq 1 ]] && acc_acc_bool="true"
   local priv_req_bool="false"
   [[ "$PRIVILEGE_REQUIRED" -eq 1 ]] && priv_req_bool="true"
+  local cfg_ready_bool="false"
+  [[ "$CONFIG_DIR_READY" -eq 1 ]] && cfg_ready_bool="true"
 
   cat << EOF
 {
+  "config_dir": "$CONFIG_DIR",
+  "config_dir_ready": $cfg_ready_bool,
   "installed": $inst_bool,
   "target_arch": "$TARGET_ARCH",
   "version": "$QEMU_VERSION",
@@ -634,7 +674,7 @@ output_json() {
   "package_manager": "$PKG_MGR",
   "privilege_required": $priv_req_bool,
   "wizard_recommended": $priv_req_bool,
-  "wizard_command": "./scripts/ensure-qemu.sh --wizard",
+  "wizard_command": "./scripts/sanity-check.sh --wizard",
   "binaries": $bin_json,
   "acceleration": {
     "type": "$ACCEL_TYPE",
@@ -647,6 +687,7 @@ EOF
 }
 
 output_text() {
+  log_info "Config directory: $CONFIG_DIR ($([[ "$CONFIG_DIR_READY" -eq 1 ]] && echo "ready" || echo "uninitialized"))"
   if [[ "$QEMU_INSTALLED" -eq 1 ]]; then
     log_info "QEMU is installed (Version: ${QEMU_VERSION:-detected})."
     log_info "Target binary: $(command -v "qemu-system-$TARGET_ARCH" 2>/dev/null || command -v qemu-img 2>/dev/null || echo "Available")"
@@ -656,7 +697,7 @@ output_text() {
       else
         log_warn "Acceleration ($ACCEL_TYPE): Supported by CPU, but permissions or group membership needed."
         log_warn "$ACCEL_DETAILS"
-        log_info "To configure interactively, run: ./scripts/ensure-qemu.sh --wizard"
+        log_info "To configure interactively, run: ./scripts/sanity-check.sh --wizard"
       fi
     else
       log_warn "Acceleration ($ACCEL_TYPE): Not available ($ACCEL_DETAILS)."
@@ -665,7 +706,7 @@ output_text() {
     log_warn "QEMU (target: $TARGET_ARCH) is not installed on this system ($OS_TYPE / $DISTRO)."
     if [[ "$PRIVILEGE_REQUIRED" -eq 1 ]]; then
       log_warn "Installation requires elevated privileges (sudo/root)."
-      log_info "Run the interactive setup wizard: ./scripts/ensure-qemu.sh --wizard"
+      log_info "Run the interactive setup wizard: ./scripts/sanity-check.sh --wizard"
     fi
   fi
 }
@@ -733,7 +774,7 @@ if [[ "$QEMU_INSTALLED" -eq 0 ]]; then
       else
         log_error "Root privileges are required to install packages on $DISTRO via $PKG_MGR."
         log_info "Please launch the interactive setup wizard in a terminal:"
-        printf '\n    %s./scripts/ensure-qemu.sh --wizard%s\n\n' "$BOLD" "$RESET"
+        printf '\n    %s./scripts/sanity-check.sh --wizard%s\n\n' "$BOLD" "$RESET"
       fi
       exit 3
     fi

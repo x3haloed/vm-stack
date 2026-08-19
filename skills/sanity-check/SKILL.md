@@ -1,11 +1,11 @@
 ---
-name: ensure-qemu
-description: Use when verifying, detecting, or installing QEMU (including qemu-img, qemu-system-x86_64, qemu-system-aarch64) or checking virtualization acceleration (KVM, HVF, WHPX) across macOS, Linux distributions, and Windows.
+name: sanity-check
+description: Use when verifying the local vm-stack environment, ensuring ~/.config/vm-stack/ exists, detecting or installing QEMU (including qemu-img, qemu-system-x86_64, qemu-system-aarch64), and checking virtualization acceleration (KVM, HVF, WHPX) across macOS, Linux distributions, and Windows.
 ---
 
-# Ensure QEMU
+# Sanity Check
 
-Detects whether QEMU and its virtualization utilities are installed on the local host, verifies hardware acceleration capabilities (KVM, HVF, WHPX), and provides automated verification and an interactive multi-stage setup wizard for operations requiring elevated privileges.
+Verifies the host environment for `vm-stack`, ensures the configuration directory `~/.config/vm-stack/` exists, detects QEMU and its virtualization utilities, checks hardware acceleration capabilities (KVM, HVF, WHPX), and provides automated verification alongside an interactive multi-stage setup wizard for operations requiring elevated privileges.
 
 ---
 
@@ -15,8 +15,9 @@ When preparing an environment for VM workloads, follow this deterministic decisi
 
 ```
                       +──────────────────────────+
-                      |   Run Detection Check    |
-                      | ensure-qemu.sh --check   |
+                      |   Run Sanity Check       |
+                      | sanity-check.sh --check  |
+                      | Ensures ~/.config/vm-stack/
                       +─────────────┬────────────+
                                     │
                          Is QEMU installed and
@@ -35,26 +36,28 @@ When preparing an environment for VM workloads, follow this deterministic decisi
                                      │                           │
                             Run Non-Privileged           Pop Open Interactive
                             Install (e.g. brew)          Setup Wizard for User
-                                     │                   ensure-qemu.sh --wizard
+                                     │                   sanity-check.sh --wizard
                                      │                           │
                                      └─────────────┬─────────────┘
                                                    │
                                      Verify with Smoke Test
-                                     ensure-qemu.sh --check
+                                     sanity-check.sh --check
 ```
 
 ### 1. Step 1: Discover Environment & Status (Non-Interactive)
-Run the check script with `--json` (or `--check`) to inspect host capabilities without making changes:
+Run the check script with `--json` (or `--check`) to inspect host capabilities and initialize `~/.config/vm-stack/` without making intrusive system changes:
 
 ```bash
 # macOS / Linux
-./scripts/ensure-qemu.sh --check --json
+./scripts/sanity-check.sh --check --json
 
 # Windows (PowerShell)
-.\scripts\ensure-qemu.ps1 -Check -Json
+.\scripts\sanity-check.ps1 -Check -Json
 ```
 
 Inspect the returned JSON object:
+- `config_dir`: Path to `~/.config/vm-stack/` (or platform equivalent)
+- `config_dir_ready`: `true`
 - `installed`: `true` / `false`
 - `privilege_required`: `true` / `false`
 - `acceleration.accessible`: `true` / `false`
@@ -85,12 +88,12 @@ Launch the wizard in the user's terminal:
 
 ```bash
 # macOS / Linux
-./scripts/ensure-qemu.sh --wizard
+./scripts/sanity-check.sh --wizard
 # or shortcut:
 ./scripts/qemu-wizard.sh
 
 # Windows (PowerShell)
-.\scripts\ensure-qemu.ps1 -Wizard
+.\scripts\sanity-check.ps1 -Wizard
 # or shortcut:
 .\scripts\qemu-wizard.ps1
 ```
@@ -106,42 +109,42 @@ Launch the wizard in the user's terminal:
 Re-run the status check to ensure everything is operational:
 
 ```bash
-./scripts/ensure-qemu.sh --check
+./scripts/sanity-check.sh --check
 ```
 
 ---
 
 ## Command-Line Reference
 
-### macOS & Linux (`ensure-qemu.sh` / `qemu-wizard.sh`)
+### macOS & Linux (`sanity-check.sh` / `qemu-wizard.sh`)
 ```bash
-# Status check (Exit 0=ready, 2=missing)
-./scripts/ensure-qemu.sh --check
+# Status check & config directory initialization (Exit 0=ready, 2=missing)
+./scripts/sanity-check.sh --check
 
 # Machine-readable JSON output
-./scripts/ensure-qemu.sh --check --json
+./scripts/sanity-check.sh --check --json
 
 # Target a specific architecture (e.g. aarch64, arm, x86_64)
-./scripts/ensure-qemu.sh --check --target aarch64
+./scripts/sanity-check.sh --check --target aarch64
 
 # Launch interactive multi-stage wizard
-./scripts/ensure-qemu.sh --wizard
+./scripts/sanity-check.sh --wizard
 ./scripts/qemu-wizard.sh
 ```
 
-### Windows (`ensure-qemu.ps1` / `qemu-wizard.ps1`)
+### Windows (`sanity-check.ps1` / `qemu-wizard.ps1`)
 ```powershell
-# Status check
-.\scripts\ensure-qemu.ps1 -Check
+# Status check & config directory initialization
+.\scripts\sanity-check.ps1 -Check
 
 # JSON output
-.\scripts\ensure-qemu.ps1 -Check -Json
+.\scripts\sanity-check.ps1 -Check -Json
 
 # Target a specific architecture
-.\scripts\ensure-qemu.ps1 -Check -Target aarch64
+.\scripts\sanity-check.ps1 -Check -Target aarch64
 
 # Launch interactive wizard
-.\scripts\ensure-qemu.ps1 -Wizard
+.\scripts\sanity-check.ps1 -Wizard
 .\scripts\qemu-wizard.ps1
 ```
 

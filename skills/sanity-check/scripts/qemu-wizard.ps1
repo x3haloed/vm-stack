@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Interactive setup wizard for QEMU and virtualization acceleration on Windows.
+    Interactive setup wizard for sanity-check on Windows.
 #>
 
 [CmdletBinding()]
@@ -12,5 +12,5 @@ param(
     [string]$InstallMethod = "auto"
 )
 
-$scriptPath = Join-Path $PSScriptRoot "ensure-qemu.ps1"
+$scriptPath = Join-Path $PSScriptRoot "sanity-check.ps1"
 & $scriptPath -Wizard -Target $Target -InstallMethod $InstallMethod
