@@ -196,8 +196,8 @@ log_info "Using Windows Installation ISO: $ISO_PATH"
 # Ensure VirtIO drivers ISO is present
 VIRTIO_ISO="$MEDIA_DIR/virtio-win.iso"
 if [[ ! -f "$VIRTIO_ISO" ]]; then
-  log_info "VirtIO drivers not found. Downloading to $VIRTIO_ISO..."
-  "$FETCH_MEDIA_SCRIPT" virtio-win
+  log_info "VirtIO drivers not found in cache. Attempting download..."
+  "$FETCH_MEDIA_SCRIPT" virtio-win 2>/dev/null || log_warn "Could not download virtio-win.iso (offline or unreachable). Continuing without it."
 fi
 
 # 1. Authoritatively create the VM via manage-vms.sh
@@ -254,11 +254,9 @@ QEMU_CMD=(
   -device usb-kbd
   -device usb-tablet
   -drive file="$DISK_PATH",if=none,id=hd0,format=qcow2
-  -device nvme,drive=hd0,serial=nvme0
+  -device nvme,drive=hd0,serial=nvme0,bootindex=0
   -device usb-storage,drive=win_iso,bootindex=1
   -drive file="$ISO_PATH",if=none,id=win_iso,format=raw,media=cdrom,readonly=on
-  -device usb-storage,drive=virtio_iso
-  -drive file="$VIRTIO_ISO",if=none,id=virtio_iso,format=raw,media=cdrom,readonly=on
   -device usb-storage,drive=unattend_iso
   -drive file="$UNATTEND_ISO",if=none,id=unattend_iso,format=raw,media=cdrom,readonly=on
   -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22,hostfwd=tcp::${RDP_PORT}-:3389
