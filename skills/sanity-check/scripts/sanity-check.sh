@@ -179,7 +179,7 @@ ensure_config_and_preferences() {
 }
 EOF
 )
-      if printf '%s\n' "$default_prefs" > "$PREFERENCES_FILE" 2>/dev/null; then
+      if (printf '%s\n' "$default_prefs" > "$PREFERENCES_FILE") 2>/dev/null; then
         PREFERENCES_READY=1
         PREFERENCES_CREATED=1
         log_debug "Created default preferences file: $PREFERENCES_FILE"

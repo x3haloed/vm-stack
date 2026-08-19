@@ -43,6 +43,7 @@ USERNAME="admin"
 PASSWORD="admin"
 HOSTNAME="WINDOWS-VM"
 TARGET_ARCH="arm64"
+PRODUCT_KEY="VK7JG-NPHTM-C97JM-9MPGT-3V66T"
 
 # Auto-detect architecture
 host_m="$(uname -m 2>/dev/null || echo "arm64")"
@@ -76,6 +77,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -n|--hostname)
       HOSTNAME="$2"
+      shift 2
+      ;;
+    -k|--key|--product-key)
+      PRODUCT_KEY="$2"
       shift 2
       ;;
     --xml-only)
@@ -141,7 +146,7 @@ generate_xml_content() {
                         <CreatePartition wcm:action="add">
                             <Order>2</Order>
                             <Type>MSR</Type>
-                            <Size>128</Size>
+                            <Size>16</Size>
                         </CreatePartition>
                         <!-- Windows Primary Partition -->
                         <CreatePartition wcm:action="add">
@@ -186,6 +191,10 @@ generate_xml_content() {
                 <AcceptEula>true</AcceptEula>
                 <FullName>${USERNAME}</FullName>
                 <Organization>vm-stack</Organization>
+                <ProductKey>
+                    <Key>${PRODUCT_KEY}</Key>
+                    <WillShowUI>OnError</WillShowUI>
+                </ProductKey>
             </UserData>
         </component>
         <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="${TARGET_ARCH}" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/StateMachine" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
@@ -199,11 +208,27 @@ generate_xml_content() {
         </component>
     </settings>
 
-    <!-- Pass 4: Specialize (Hostname & Network) -->
+    <!-- Pass 4: Specialize (Hostname, Network & Bypasses) -->
     <settings pass="specialize">
         <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="${TARGET_ARCH}" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/StateMachine" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
             <ComputerName>${HOSTNAME}</ComputerName>
             <TimeZone>UTC</TimeZone>
+        </component>
+        <component name="Microsoft-Windows-Deployment" processorArchitecture="${TARGET_ARCH}" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/StateMachine" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <RunSynchronous>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>1</Order>
+                    <Path>reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</Path>
+                </RunSynchronousCommand>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>2</Order>
+                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+                </RunSynchronousCommand>
+                <RunSynchronousCommand wcm:action="add">
+                    <Order>3</Order>
+                    <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+                </RunSynchronousCommand>
+            </RunSynchronous>
         </component>
     </settings>
 
@@ -219,6 +244,20 @@ generate_xml_content() {
                 <LogonCount>5</LogonCount>
                 <Username>${USERNAME}</Username>
             </AutoLogon>
+            <FirstLogonCommands>
+                <!-- Enable OpenSSH Server on First Boot -->
+                <SynchronousCommand wcm:action="add">
+                    <CommandLine>powershell -ExecutionPolicy Bypass -Command "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; Start-Service sshd; Set-Service -Name sshd -StartupType 'Automatic'; New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22"</CommandLine>
+                    <Description>Enable OpenSSH Server</Description>
+                    <Order>1</Order>
+                </SynchronousCommand>
+                <!-- Configure WinRM -->
+                <SynchronousCommand wcm:action="add">
+                    <CommandLine>powershell -ExecutionPolicy Bypass -Command "Set-NetFirewallRule -DisplayGroup 'Windows Remote Management' -Enabled True -ErrorAction SilentlyContinue"</CommandLine>
+                    <Description>Enable WinRM Firewall Rules</Description>
+                    <Order>2</Order>
+                </SynchronousCommand>
+            </FirstLogonCommands>
             <OOBE>
                 <HideEULAPage>true</HideEULAPage>
                 <HideOEMRegistrationScreens>true</HideOEMRegistrationScreens>
@@ -226,7 +265,6 @@ generate_xml_content() {
                 <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
                 <NetworkLocation>Work</NetworkLocation>
                 <ProtectYourPC>3</ProtectYourPC>
-                <SkipUserOOBE>true</SkipUserOOBE>
             </OOBE>
             <UserAccounts>
                 <AdministratorPassword>
@@ -246,20 +284,6 @@ generate_xml_content() {
                     </LocalAccount>
                 </LocalAccounts>
             </UserAccounts>
-            <FirstLogonCommands>
-                <!-- Enable OpenSSH Server on First Boot -->
-                <SynchronousCommand wcm:action="add">
-                    <Order>1</Order>
-                    <CommandLine>powershell -Command "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; Start-Service sshd; Set-Service -Name sshd -StartupType 'Automatic'; New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22"</CommandLine>
-                    <Description>Enable OpenSSH Server</Description>
-                </SynchronousCommand>
-                <!-- Configure WinRM -->
-                <SynchronousCommand wcm:action="add">
-                    <Order>2</Order>
-                    <CommandLine>powershell -Command "Set-NetFirewallRule -DisplayGroup 'Windows Remote Management' -Enabled True"</CommandLine>
-                    <Description>Enable WinRM Firewall Rules</Description>
-                </SynchronousCommand>
-            </FirstLogonCommands>
         </component>
     </settings>
 </unattend>
@@ -275,6 +299,7 @@ fi
 
 # Build unattend.iso
 mkdir -p "$(dirname "$OUTPUT_ISO")" 2>/dev/null || true
+rm -f "$OUTPUT_ISO"
 TEMP_ISO_DIR="$(mktemp -d -t vm_unattend_XXXXXX)"
 generate_xml_content > "$TEMP_ISO_DIR/autounattend.xml"
 
@@ -282,7 +307,7 @@ log_info "Building unattend ISO (${TARGET_ARCH}) -> $OUTPUT_ISO"
 
 if command -v hdiutil >/dev/null 2>&1; then
   # Native macOS ISO generation
-  hdiutil makehybrid -o "$OUTPUT_ISO" -iso -joliet -default-volume-name UNATTEND "$TEMP_ISO_DIR" >/dev/null 2>&1
+  hdiutil makehybrid -ov -o "$OUTPUT_ISO" -iso -joliet -default-volume-name UNATTEND "$TEMP_ISO_DIR" >/dev/null 2>&1
 elif command -v xorriso >/dev/null 2>&1; then
   xorriso -as mkisofs -o "$OUTPUT_ISO" -V UNATTEND -J -r "$TEMP_ISO_DIR" >/dev/null 2>&1
 elif command -v mkisofs >/dev/null 2>&1; then

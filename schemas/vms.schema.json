@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VMStackInventory",
+  "description": "Authoritative registry schema for local virtual machines in vm-stack",
+  "type": "object",
+  "required": [
+    "version",
+    "updated_at",
+    "vms"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Schema version",
+      "default": 1
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of last inventory update"
+    },
+    "vms": {
+      "type": "object",
+      "description": "Map of VM name to authoritative VM specifications",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "name",
+          "disk",
+          "os",
+          "arch",
+          "cpus",
+          "memory",
+          "accel"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_-]+$",
+            "description": "Unique identifier and name of the virtual machine"
+          },
+          "disk": {
+            "type": "string",
+            "description": "Absolute path to the primary QEMU disk image (e.g. .qcow2 or .raw)"
+          },
+          "os": {
+            "type": "string",
+            "enum": [
+              "windows",
+              "ubuntu",
+              "debian",
+              "alpine",
+              "generic",
+              "custom"
+            ],
+            "description": "Guest operating system label"
+          },
+          "arch": {
+            "type": "string",
+            "enum": [
+              "aarch64",
+              "x86_64",
+              "arm",
+              "i386",
+              "riscv64"
+            ],
+            "description": "Target processor architecture"
+          },
+          "cpus": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64,
+            "description": "Number of allocated virtual CPU cores"
+          },
+          "memory": {
+            "type": "string",
+            "pattern": "^[0-9]+[MGmg]$",
+            "description": "Allocated memory size (e.g. 4G, 8G, 2048M)"
+          },
+          "accel": {
+            "type": "string",
+            "enum": [
+              "hvf",
+              "kvm",
+              "whpx",
+              "tcg"
+            ],
+            "description": "Hardware virtualization acceleration framework"
+          },
+          "ssh_port": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 65535,
+            "description": "Host forwarded TCP port for guest SSH service"
+          },
+          "rdp_port": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 65535,
+            "description": "Host forwarded TCP port for guest RDP service"
+          },
+          "extra_args": {
+            "type": "string",
+            "description": "Custom extra QEMU arguments passed verbatim"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of VM workload or role"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 creation timestamp"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 last modified timestamp"
+          }
+        }
+      }
+    }
+  }
+}

@@ -7,7 +7,7 @@ description: Use when verifying the local vm-stack environment, ensuring ~/.conf
 
 Verifies the host environment for `vm-stack`, ensures the configuration directory `~/.config/vm-stack/` and preferences file `~/.config/vm-stack/preferences.json` exist, detects QEMU and its virtualization utilities, checks hardware acceleration capabilities (KVM, HVF, WHPX), and provides automated verification alongside an interactive multi-stage setup wizard for operations requiring elevated privileges.
 
-Schema definition: [schemas/preferences.schema.json](file:///Users/chad/Repos/vm-stack/schemas/preferences.schema.json)
+- Schema definition: [schemas/preferences.schema.json](file:///Users/chad/Repos/vm-stack/schemas/preferences.schema.json)
 
 ---
 

@@ -1,0 +1,9 @@
+{
+  "name": "vm-stack",
+  "version": "1.0.0",
+  "description": "Agent-managed local virtual machines, zero-touch ephemeral testbeds, and cross-platform automation across macOS, Linux, and Windows.",
+  "author": {
+    "name": "Stack Studio"
+  },
+  "skills": "./skills/"
+}

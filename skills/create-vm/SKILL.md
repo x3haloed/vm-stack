@@ -1,11 +1,15 @@
 ---
 name: create-vm
-description: Use when creating, provisioning, downloading installation media for, or starting new Windows, Linux, or custom virtual machines in vm-stack on macOS.
+description: Use when creating, provisioning, downloading installation media for, or starting new Windows, Linux, or custom virtual machines in vm-stack across macOS, Linux, or Windows.
 ---
 
 # Create VM
 
-Authoritative procedural guide and tooling for creating, provisioning, and automating local virtual machines in `vm-stack` on macOS.
+Authoritative procedural guide and tooling for creating, provisioning, and automating local virtual machines in `vm-stack` across macOS, Linux, and Windows.
+
+- Windows Unattended Guide: [references/windows-provisioning.md](file:///Users/chad/Repos/vm-stack/skills/create-vm/references/windows-provisioning.md)
+- Linux Cloud-Init Guide: [references/cloud-init-linux.md](file:///Users/chad/Repos/vm-stack/skills/create-vm/references/cloud-init-linux.md)
+- Desktop Wizard Helper: [scripts/launch-terminal.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/launch-terminal.sh)
 
 Covers automated media acquisition, unattended installation (`autounattend.xml` / `cloud-init`), UEFI NVRAM firmware handling, TPM/SecureBoot bypasses, and interactive desktop wizard fallbacks when human intervention is needed.
 

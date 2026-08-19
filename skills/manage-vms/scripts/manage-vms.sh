@@ -51,9 +51,14 @@ ${BOLD}QEMU & Disk Management (Bound to Registry):${RESET}
   ${BLUE}snapshot${RESET} <name> <action> [...]    Manage internal disk snapshots (create, list, rollback, delete)
 
 ${BOLD}VM Lifecycle & Execution:${RESET}
-  ${BLUE}start${RESET} <name> [options]          Start VM with QEMU (foreground or background daemon)
+  ${BLUE}start${RESET} <name> [options]          Start VM with QEMU (foreground, background daemon, or snapshot mode)
   ${BLUE}stop${RESET} <name> [options]           Stop running VM (graceful ACPI shutdown or force kill)
   ${BLUE}status${RESET} <name> [options]         Check live runtime status (process liveness, ports)
+  ${BLUE}wait-ready${RESET} <name> [options]     Wait for guest SSH service to become responsive
+  ${BLUE}exec${RESET} <name> [options] -- <cmd>   Execute command inside guest via SSH
+  ${BLUE}copy-to${RESET} <name> <src> <dest>      Copy local file/directory into guest via SCP
+  ${BLUE}copy-from${RESET} <name> <src> <dest>    Copy file/directory from guest to host via SCP
+  ${BLUE}run-ephemeral${RESET} <base> -- <cmd>   Start disposable VM with snapshot discard, run command, and stop
 
 ${BOLD}Inventory Query & Inspection:${RESET}
   ${BLUE}list${RESET} [options]                  List all registered VMs with live probed status
@@ -82,6 +87,7 @@ ${BOLD}Options for 'create':${RESET}
 
 ${BOLD}Options for 'start':${RESET}
   -d, --daemon, --background Run VM in background process (PID tracked in run/<name>.pid)
+  --snapshot, --ephemeral    Discard all disk writes on VM stop (base disk untouched)
   --display <mode>           Display mode (default, cocoa, gtk, vnc, none) [default: default]
   --ssh-port <port>          Override host SSH forward port
   --rdp-port <port>          Override host RDP forward port
@@ -89,6 +95,9 @@ ${BOLD}Options for 'start':${RESET}
   --cpus <n>                 Override CPU core count for this run
   --extra-args <args>        Additional QEMU arguments for this invocation
   --dry-run                  Print assembled QEMU command without executing
+
+${BOLD}Options for 'exec':${RESET}
+  manage-vms.sh exec <name> [--user <user>] [--password <pass>] [--timeout <sec>] -- <cmd...>
 
 ${BOLD}Options for 'stop':${RESET}
   -f, --force                Force immediate termination (SIGKILL) instead of graceful SIGTERM
@@ -158,9 +167,11 @@ def get_utc_iso():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def ensure_dirs():
-    os.makedirs(config_dir, exist_ok=True)
-    os.makedirs(images_dir, exist_ok=True)
-    os.makedirs(run_dir, exist_ok=True)
+    for d in [config_dir, images_dir, run_dir]:
+        try:
+            os.makedirs(d, exist_ok=True)
+        except OSError:
+            pass
 
 def load_registry():
     ensure_dirs()
@@ -736,6 +747,7 @@ elif action == "start":
     parser = argparse.ArgumentParser(prog="manage-vms start")
     parser.add_argument("name")
     parser.add_argument("-d", "--daemon", "--background", dest="daemon", action="store_true")
+    parser.add_argument("--snapshot", "--ephemeral", dest="snapshot", action="store_true", help="Write changes to temporary files and discard on exit")
     parser.add_argument("--display", default="default", choices=["default", "cocoa", "gtk", "vnc", "none"])
     parser.add_argument("--ssh-port", type=int, default=None)
     parser.add_argument("--rdp-port", type=int, default=None)
@@ -791,6 +803,9 @@ elif action == "start":
         "-netdev", f"user,id=net0,hostfwd=tcp::{ssh_p}-:22,hostfwd=tcp::{rdp_p}-:3389",
         "-device", "virtio-net-pci,netdev=net0"
     ]
+
+    if parsed.snapshot:
+        cmd.append("-snapshot")
 
     # Arch-specific machine & firmware
     if arch == "aarch64":
@@ -1258,6 +1273,294 @@ elif action == "sync":
         print("[INFO] Inventory is in sync with filesystem.")
     sys.exit(0)
 
+elif action in ["wait-ready", "wait-ssh"]:
+    parser = argparse.ArgumentParser(prog="manage-vms wait-ready")
+    parser.add_argument("name")
+    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--port", type=int, default=None)
+    parsed = parser.parse_args(args)
+
+    data = load_registry()
+    name = parsed.name.strip()
+    if name not in data["vms"]:
+        print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+
+    vm = data["vms"][name]
+    port = parsed.port or vm.get("ssh_port", 2222)
+    timeout = parsed.timeout
+    start_time = time.time()
+
+    print(f"[INFO] Waiting for VM '{name}' SSH port {port} (timeout: {timeout}s)...")
+    while time.time() - start_time < timeout:
+        rt = probe_vm_runtime(name, vm.get("disk"), port)
+        if rt["ssh_ready"]:
+            print(f"[INFO] VM '{name}' is ready (SSH port {port} reachable).")
+            sys.exit(0)
+        time.sleep(2)
+
+    print(f"[ERROR] Timed out waiting for VM '{name}' after {timeout} seconds.", file=sys.stderr)
+    sys.exit(1)
+
+elif action in ["exec", "ssh"]:
+    split_idx = -1
+    for i, a in enumerate(args):
+        if a == "--":
+            split_idx = i
+            break
+
+    if split_idx != -1:
+        flag_args = args[:split_idx]
+        cmd_args = args[split_idx + 1:]
+    else:
+        flag_args = args[:1]
+        cmd_args = args[1:]
+
+    parser = argparse.ArgumentParser(prog="manage-vms exec")
+    parser.add_argument("name")
+    parser.add_argument("--user", default=None)
+    parser.add_argument("--password", default=None)
+    parser.add_argument("--key", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--timeout", type=int, default=120)
+    parsed = parser.parse_args(flag_args)
+
+    if not cmd_args:
+        print("[ERROR] No command specified to execute. Usage: manage-vms.sh exec <name> [options] -- <cmd...>", file=sys.stderr)
+        sys.exit(1)
+
+    data = load_registry()
+    name = parsed.name.strip()
+    if name not in data["vms"]:
+        print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+
+    vm = data["vms"][name]
+    port = parsed.port or vm.get("ssh_port", 2222)
+    os_type = vm.get("os", "generic").lower()
+    user = parsed.user or ("admin" if os_type in ["windows", "macos"] else "ubuntu" if os_type == "ubuntu" else "root")
+    password = parsed.password or ("admin" if os_type == "windows" else None)
+
+    guest_cmd = " ".join(cmd_args) if len(cmd_args) > 1 else cmd_args[0]
+
+    ssh_base = [
+        "ssh",
+        "-p", str(port),
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", f"ConnectTimeout={min(parsed.timeout, 15)}",
+        "-o", "LogLevel=ERROR",
+    ]
+
+    if parsed.key:
+        ssh_base.extend(["-i", os.path.abspath(parsed.key)])
+
+    target_dest = f"{user}@127.0.0.1"
+
+    def run_interactive_pty(cmd_list, pwd=None, timeout_sec=60):
+        if not pwd or shutil.which("sshpass"):
+            if pwd and shutil.which("sshpass"):
+                full = ["sshpass", "-p", pwd] + cmd_list
+            else:
+                full = cmd_list
+            return subprocess.run(full).returncode
+        try:
+            import pty, select
+            master, slave = pty.openpty()
+            proc = subprocess.Popen(cmd_list, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+            os.close(slave)
+            buf = b""
+            password_sent = False
+            start_time = time.time()
+            while proc.poll() is None:
+                if time.time() - start_time > timeout_sec:
+                    proc.kill()
+                    os.close(master)
+                    return 124
+                r, _, _ = select.select([master], [], [], 0.1)
+                if master in r:
+                    try:
+                        data = os.read(master, 1024)
+                        if not data:
+                            break
+                        buf += data
+                        if not password_sent and (b"password:" in buf.lower() or b"password for" in buf.lower()):
+                            os.write(master, (pwd + "\n").encode("utf-8"))
+                            password_sent = True
+                            buf = b""
+                        else:
+                            sys.stdout.buffer.write(data)
+                            sys.stdout.buffer.flush()
+                    except OSError:
+                        break
+            os.close(master)
+            return proc.wait()
+        except Exception:
+            return subprocess.run(cmd_list).returncode
+
+    try:
+        rc = run_interactive_pty(ssh_base + [target_dest, guest_cmd], password, parsed.timeout)
+        sys.exit(rc)
+    except FileNotFoundError:
+        print("[ERROR] 'ssh' binary not found.", file=sys.stderr)
+        sys.exit(1)
+
+elif action in ["copy-to", "copy-from"]:
+    parser = argparse.ArgumentParser(prog=f"manage-vms {action}")
+    parser.add_argument("name")
+    parser.add_argument("src")
+    parser.add_argument("dest")
+    parser.add_argument("--user", default=None)
+    parser.add_argument("--password", default=None)
+    parser.add_argument("--key", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parsed = parser.parse_args(args)
+
+    data = load_registry()
+    name = parsed.name.strip()
+    if name not in data["vms"]:
+        print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+
+    vm = data["vms"][name]
+    port = parsed.port or vm.get("ssh_port", 2222)
+    os_type = vm.get("os", "generic").lower()
+    user = parsed.user or ("admin" if os_type in ["windows", "macos"] else "ubuntu" if os_type == "ubuntu" else "root")
+    password = parsed.password or ("admin" if os_type == "windows" else None)
+
+    scp_base = [
+        "scp",
+        "-P", str(port),
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR",
+        "-r"
+    ]
+
+    if parsed.key:
+        scp_base.extend(["-i", os.path.abspath(parsed.key)])
+
+    if action == "copy-to":
+        src_path = os.path.abspath(parsed.src)
+        dest_target = f"{user}@127.0.0.1:{parsed.dest}"
+        transfer_cmd = scp_base + [src_path, dest_target]
+    else:
+        src_target = f"{user}@127.0.0.1:{parsed.src}"
+        dest_path = os.path.abspath(parsed.dest)
+        transfer_cmd = scp_base + [src_target, dest_path]
+
+    def run_interactive_pty(cmd_list, pwd=None, timeout_sec=120):
+        if not pwd or shutil.which("sshpass"):
+            if pwd and shutil.which("sshpass"):
+                full = ["sshpass", "-p", pwd] + cmd_list
+            else:
+                full = cmd_list
+            return subprocess.run(full).returncode
+        try:
+            import pty, select
+            master, slave = pty.openpty()
+            proc = subprocess.Popen(cmd_list, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
+            os.close(slave)
+            buf = b""
+            password_sent = False
+            start_time = time.time()
+            while proc.poll() is None:
+                if time.time() - start_time > timeout_sec:
+                    proc.kill()
+                    os.close(master)
+                    return 124
+                r, _, _ = select.select([master], [], [], 0.1)
+                if master in r:
+                    try:
+                        data = os.read(master, 1024)
+                        if not data:
+                            break
+                        buf += data
+                        if not password_sent and (b"password:" in buf.lower() or b"password for" in buf.lower()):
+                            os.write(master, (pwd + "\n").encode("utf-8"))
+                            password_sent = True
+                            buf = b""
+                        else:
+                            sys.stdout.buffer.write(data)
+                            sys.stdout.buffer.flush()
+                    except OSError:
+                        break
+            os.close(master)
+            return proc.wait()
+        except Exception:
+            return subprocess.run(cmd_list).returncode
+
+    try:
+        rc = run_interactive_pty(transfer_cmd, password, 120)
+        sys.exit(rc)
+    except FileNotFoundError:
+        print("[ERROR] 'scp' binary not found.", file=sys.stderr)
+        sys.exit(1)
+
+elif action == "run-ephemeral":
+    split_idx = -1
+    for i, a in enumerate(args):
+        if a == "--":
+            split_idx = i
+            break
+
+    if split_idx != -1:
+        flag_args = args[:split_idx]
+        cmd_args = args[split_idx + 1:]
+    else:
+        flag_args = args[:1]
+        cmd_args = args[1:]
+
+    parser = argparse.ArgumentParser(prog="manage-vms run-ephemeral")
+    parser.add_argument("name")
+    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--user", default=None)
+    parser.add_argument("--password", default=None)
+    parser.add_argument("--key", default=None)
+    parsed = parser.parse_args(flag_args)
+
+    if not cmd_args:
+        print("[ERROR] No command specified. Usage: manage-vms.sh run-ephemeral <base-name> [options] -- <cmd...>", file=sys.stderr)
+        sys.exit(1)
+
+    name = parsed.name.strip()
+    data = load_registry()
+    if name not in data["vms"]:
+        print(f"[ERROR] Base VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+
+    script_self = sys.argv[0] if sys.argv[0] != "-" else "/bin/bash"
+
+    print(f"[INFO] Starting ephemeral snapshot instance of '{name}'...")
+    # Start VM in daemon snapshot mode
+    subprocess.run([sys.executable, "-", config_dir, registry_path, images_dir, run_dir, "start", name, "--daemon", "--snapshot"], input=open(__file__).read() if __file__ != "<stdin>" else "", text=True)
+
+    # Wait for SSH
+    print(f"[INFO] Waiting for guest readiness...")
+    wait_res = subprocess.run([sys.executable, "-", config_dir, registry_path, images_dir, run_dir, "wait-ready", name, "--timeout", str(parsed.timeout)])
+    if wait_res.returncode != 0:
+        print(f"[ERROR] Ephemeral VM failed to become ready.", file=sys.stderr)
+        # Cleanup
+        subprocess.run([sys.executable, "-", config_dir, registry_path, images_dir, run_dir, "stop", name, "--force"])
+        sys.exit(1)
+
+    # Run command
+    print(f"[INFO] Executing guest command in ephemeral instance...")
+    exec_args = [sys.executable, "-", config_dir, registry_path, images_dir, run_dir, "exec", name]
+    if parsed.user: exec_args.extend(["--user", parsed.user])
+    if parsed.password: exec_args.extend(["--password", parsed.password])
+    if parsed.key: exec_args.extend(["--key", parsed.key])
+    exec_args.append("--")
+    exec_args.extend(cmd_args)
+
+    cmd_res = subprocess.run(exec_args)
+    cmd_code = cmd_res.returncode
+
+    # Stop VM
+    print(f"[INFO] Tearing down ephemeral instance (all writes discarded)...")
+    subprocess.run([sys.executable, "-", config_dir, registry_path, images_dir, run_dir, "stop", name, "--force"])
+    sys.exit(cmd_code)
+
 else:
     print(f"[ERROR] Unknown action: {action}", file=sys.stderr)
     sys.exit(1)
@@ -1300,6 +1603,21 @@ case "$COMMAND" in
     ;;
   status)
     run_py_gateway "status" "$@"
+    ;;
+  wait-ready|wait-ssh|wait)
+    run_py_gateway "wait-ready" "$@"
+    ;;
+  exec|ssh)
+    run_py_gateway "exec" "$@"
+    ;;
+  copy-to|upload|push)
+    run_py_gateway "copy-to" "$@"
+    ;;
+  copy-from|download|pull)
+    run_py_gateway "copy-from" "$@"
+    ;;
+  run-ephemeral|ephemeral)
+    run_py_gateway "run-ephemeral" "$@"
     ;;
   snapshot|snap)
     run_py_gateway "snapshot" "$@"

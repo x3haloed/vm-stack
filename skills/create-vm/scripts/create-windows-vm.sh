@@ -266,6 +266,13 @@ QEMU_CMD=(
   -device virtio-net-pci,netdev=net0
 )
 
+if [[ -f "$VIRTIO_ISO" ]]; then
+  QEMU_CMD+=(
+    -device usb-storage,drive=virtio_iso
+    -drive file="$VIRTIO_ISO",if=none,id=virtio_iso,format=raw,media=cdrom,readonly=on
+  )
+fi
+
 if [[ "$QEMU_ARCH" = "aarch64" ]]; then
   QEMU_CMD+=(-M virt,highmem=on -device ramfb)
 else
