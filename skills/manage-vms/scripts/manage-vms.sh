@@ -130,6 +130,7 @@ import subprocess
 import datetime
 import argparse
 import shutil
+import shlex
 import signal
 import time
 import socket
@@ -787,6 +788,7 @@ elif action == "start":
     accel = vm.get("accel", get_default_accel())
     ssh_p = parsed.ssh_port or vm.get("ssh_port", 2222)
     rdp_p = parsed.rdp_port or vm.get("rdp_port", 3389)
+    network_device = "usb-net" if arch == "aarch64" and vm.get("os", "").lower() == "windows" else "virtio-net-pci"
 
     # Assemble base command
     cmd = [
@@ -801,7 +803,7 @@ elif action == "start":
         "-drive", f"file={disk_path},if=none,id=hd0,format=qcow2",
         "-device", "nvme,drive=hd0,serial=nvme0,bootindex=0",
         "-netdev", f"user,id=net0,hostfwd=tcp::{ssh_p}-:22,hostfwd=tcp::{rdp_p}-:3389",
-        "-device", "virtio-net-pci,netdev=net0"
+        "-device", f"{network_device},netdev=net0"
     ]
 
     if parsed.snapshot:
@@ -850,7 +852,7 @@ elif action == "start":
     # Extra arguments from spec or cli
     combined_extra = f"{vm.get('extra_args', '')} {parsed.extra_args}".strip()
     if combined_extra:
-        cmd.extend(combined_extra.split())
+        cmd.extend(shlex.split(combined_extra))
 
     if parsed.dry_run:
         print("[INFO] Assembled QEMU launch command (dry-run):")

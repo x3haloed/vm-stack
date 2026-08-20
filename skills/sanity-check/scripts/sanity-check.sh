@@ -14,7 +14,7 @@ set -euo pipefail
 # Default settings
 MODE="auto"        # "auto", "install", "check", or "wizard"
 FORMAT="text"      # "text" or "json"
-TARGET_ARCH="x86_64"
+TARGET_ARCH="auto"
 QUIET=0
 VERBOSE=0
 
@@ -66,7 +66,7 @@ Options:
   -c, --check          Check status only without installing (Exit: 0=found, 2=missing)
   -i, --install        Check and install QEMU (non-interactive where possible)
   -w, --wizard         Launch interactive multi-stage setup wizard for privileged operations
-  -t, --target <arch>  Target architecture binary to verify (e.g. x86_64, aarch64, arm, all) [default: x86_64]
+  -t, --target <arch>  Target architecture binary to verify (e.g. x86_64, aarch64, arm, all) [default: host architecture]
   -j, --json           Output results in machine-readable JSON format
   -q, --quiet          Suppress non-essential output
   -v, --verbose        Enable detailed debug logging
@@ -127,6 +127,15 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$TARGET_ARCH" = "auto" ]]; then
+  host_machine="$(uname -m 2>/dev/null || echo x86_64)"
+  case "$host_machine" in
+    arm64|aarch64) TARGET_ARCH="aarch64" ;;
+    amd64|x86_64) TARGET_ARCH="x86_64" ;;
+    *)            TARGET_ARCH="$host_machine" ;;
+  esac
+fi
 
 # Expand PATH to include standard binary directories
 export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"

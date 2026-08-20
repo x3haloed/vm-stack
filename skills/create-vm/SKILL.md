@@ -7,9 +7,9 @@ description: Use when creating, provisioning, downloading installation media for
 
 Authoritative procedural guide and tooling for creating, provisioning, and automating local virtual machines in `vm-stack` across macOS, Linux, and Windows.
 
-- Windows Unattended Guide: [references/windows-provisioning.md](file:///Users/chad/Repos/vm-stack/skills/create-vm/references/windows-provisioning.md)
-- Linux Cloud-Init Guide: [references/cloud-init-linux.md](file:///Users/chad/Repos/vm-stack/skills/create-vm/references/cloud-init-linux.md)
-- Desktop Wizard Helper: [scripts/launch-terminal.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/launch-terminal.sh)
+- Windows Unattended Guide: [references/windows-provisioning.md](references/windows-provisioning.md)
+- Linux Cloud-Init Guide: [references/cloud-init-linux.md](references/cloud-init-linux.md)
+- Desktop Wizard Helper: [scripts/launch-terminal.sh](scripts/launch-terminal.sh)
 
 Covers automated media acquisition, unattended installation (`autounattend.xml` / `cloud-init`), UEFI NVRAM firmware handling, TPM/SecureBoot bypasses, and interactive desktop wizard fallbacks when human intervention is needed.
 
@@ -180,8 +180,8 @@ When human assistance is needed (such as downloading a Windows ISO from Microsof
 
 | Script | Purpose |
 | :--- | :--- |
-| **[scripts/launch-terminal.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/launch-terminal.sh)** | Spawns any wizard or command in a visible desktop GUI terminal (Terminal.app / iTerm2) for the human user. |
-| **[scripts/fetch-media.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/fetch-media.sh)** | Downloads and manages ISOs, VirtIO drivers, and cloud images in `~/.config/vm-stack/media/`. |
-| **[scripts/generate-unattend.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/generate-unattend.sh)** | Generates Windows `autounattend.xml` with TPM/SecureBoot bypasses, user credentials, and builds `unattend.iso`. |
-| **[scripts/create-windows-vm.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/create-windows-vm.sh)** | End-to-end automated runner for Windows 11/10 unattended QEMU provisioning. |
-| **[scripts/create-vm-wizard.sh](file:///Users/chad/Repos/vm-stack/skills/create-vm/scripts/create-vm-wizard.sh)** | Interactive multi-stage terminal setup wizard for human-guided media and VM creation. |
+| **[scripts/launch-terminal.sh](scripts/launch-terminal.sh)** | Spawns any wizard or command in a visible desktop GUI terminal (Terminal.app / iTerm2) for the human user. |
+| **[scripts/fetch-media.sh](scripts/fetch-media.sh)** | Downloads and manages ISOs, VirtIO drivers, and cloud images in `~/.config/vm-stack/media/`. |
+| **[scripts/generate-unattend.sh](scripts/generate-unattend.sh)** | Generates Windows `autounattend.xml` with TPM/SecureBoot bypasses, user credentials, and builds `unattend.iso`. |
+| **[scripts/create-windows-vm.sh](scripts/create-windows-vm.sh)** | End-to-end automated runner for Windows 11/10 unattended QEMU provisioning. |
+| **[scripts/create-vm-wizard.sh](scripts/create-vm-wizard.sh)** | Interactive multi-stage terminal setup wizard for human-guided media and VM creation. |

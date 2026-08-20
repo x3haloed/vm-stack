@@ -7,8 +7,8 @@ description: Use when creating, starting, stopping, checking live status, import
 
 Authoritative QEMU and filesystem gateway for local virtual machine lifecycle management, zero-touch ephemeral testbeds, and guest execution in `vm-stack` across macOS, Linux, and Windows.
 
-- Authoritative specification: [schemas/vms.schema.json](file:///Users/chad/Repos/vm-stack/schemas/vms.schema.json)
-- Bundled CLI gateway: [scripts/manage-vms.sh](file:///Users/chad/Repos/vm-stack/skills/manage-vms/scripts/manage-vms.sh)
+- Authoritative specification: [schemas/vms.schema.json](../../schemas/vms.schema.json)
+- Bundled CLI gateway: [scripts/manage-vms.sh](scripts/manage-vms.sh)
 
 ---
 
@@ -178,4 +178,3 @@ Copies files between host and guest via SCP:
 | **1** | Command syntax or QEMU/FS execution error |
 | **2** | VM not found |
 | **3** | VM already exists |
-

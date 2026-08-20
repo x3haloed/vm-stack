@@ -263,8 +263,13 @@ QEMU_CMD=(
   -device usb-storage,drive=unattend_iso
   -drive file="$UNATTEND_ISO",if=none,id=unattend_iso,format=raw,media=cdrom,readonly=on
   -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22,hostfwd=tcp::${RDP_PORT}-:3389
-  -device virtio-net-pci,netdev=net0
 )
+
+if [[ "$QEMU_ARCH" = "aarch64" ]]; then
+  QEMU_CMD+=(-device usb-net,netdev=net0)
+else
+  QEMU_CMD+=(-device virtio-net-pci,netdev=net0)
+fi
 
 if [[ -f "$VIRTIO_ISO" ]]; then
   QEMU_CMD+=(
@@ -299,19 +304,22 @@ log_info "Starting QEMU Windows installation..."
 log_info "Port Forwarding: Host :$SSH_PORT -> Guest :22 (SSH), Host :$RDP_PORT -> Guest :3389 (RDP)"
 log_info "Default Credentials: Username='$USERNAME', Password='$PASSWORD'"
 
-mkdir -p "$RUN_DIR"
-PID_FILE="$RUN_DIR/${VM_NAME}.pid"
+INSTALL_MEDIA_ARGS=(
+  -device usb-storage,drive=win_iso,bootindex=1
+  -drive "file=$ISO_PATH,if=none,id=win_iso,format=raw,media=cdrom,readonly=on"
+  -device usb-storage,drive=unattend_iso
+  -drive "file=$UNATTEND_ISO,if=none,id=unattend_iso,format=raw,media=cdrom,readonly=on"
+)
+if [[ -f "$VIRTIO_ISO" ]]; then
+  INSTALL_MEDIA_ARGS+=(
+    -device usb-storage,drive=virtio_iso
+    -drive "file=$VIRTIO_ISO,if=none,id=virtio_iso,format=raw,media=cdrom,readonly=on"
+  )
+fi
 
-# Execute QEMU with PID tracking
-"${QEMU_CMD[@]}" &
-QEMU_PID=$!
-echo "$QEMU_PID" > "$PID_FILE"
+printf -v INSTALL_EXTRA_ARGS '%q ' "${INSTALL_MEDIA_ARGS[@]}"
+"$MANAGE_VMS_SCRIPT" start "$VM_NAME" \
+  --display "$DISPLAY_MODE" \
+  --extra-args="$INSTALL_EXTRA_ARGS"
 
-cleanup_pid() {
-  rm -f "$PID_FILE" 2>/dev/null || true
-}
-trap cleanup_pid EXIT INT TERM
-
-wait "$QEMU_PID" || true
-cleanup_pid
 log_info "Windows installation session finished for '$VM_NAME'."
