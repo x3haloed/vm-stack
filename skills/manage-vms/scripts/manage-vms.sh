@@ -134,6 +134,7 @@ import datetime
 import argparse
 import shutil
 import shlex
+import re
 import signal
 import time
 import socket
@@ -1584,10 +1585,19 @@ elif action in ["copy-to", "copy-from"]:
 
     if action == "copy-to":
         src_path = os.path.abspath(parsed.src)
-        dest_target = f"{user}@127.0.0.1:{parsed.dest}"
+        remote_dest = parsed.dest
+        if os_type == "windows" and re.match(r"^[A-Za-z]:/", remote_dest):
+            remote_dest = remote_dest.replace("/", "\\")
+        dest_target = f"{user}@127.0.0.1:{remote_dest}"
         transfer_cmd = scp_base + [src_path, dest_target]
     else:
-        src_target = f"{user}@127.0.0.1:{parsed.src}"
+        remote_src = parsed.src
+        if os_type == "windows" and re.match(r"^[A-Za-z]:/", remote_src):
+            # OpenSSH's SFTP subsystem exposes drive-rooted paths as /C:/... .
+            # Unlike upload destinations handled by the remote shell, download
+            # sources must retain forward slashes and gain a leading slash.
+            remote_src = "/" + remote_src
+        src_target = f"{user}@127.0.0.1:{remote_src}"
         dest_path = os.path.abspath(parsed.dest)
         transfer_cmd = scp_base + [src_target, dest_path]
 

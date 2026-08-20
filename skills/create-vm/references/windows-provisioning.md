@@ -44,15 +44,20 @@ Windows 11 requires TPM 2.0, SecureBoot, and minimum CPU/RAM requirements by def
 - Windows 10 and 11 include an inbox NVMe driver out of the box, ensuring the disk is recognized immediately without manual driver loading during WinPE setup.
 - The installation ISO and unattend ISO are attached as native USB storage devices (`-device usb-storage`), eliminating "Missing CD/DVD drive device driver" prompts.
 
-## 4. Automatic OpenSSH Server Enablement
+## 4. Deterministic Offline Guest Provisioning
 
-In Pass 7 (`oobeSystem`), `autounattend.xml` executes PowerShell commands on first logon to install and start OpenSSH Server:
+The unattended ISO contains three root-level artifacts: `autounattend.xml`, a pinned and checksum-verified Win32-OpenSSH MSI, and `provision-windows.ps1`. The `oobeSystem` pass invokes only that script. Keeping guest changes behind one command avoids ordering races between multiple `FirstLogonCommands`.
 
-```powershell
-Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0;
-Start-Service sshd;
-Set-Service -Name sshd -StartupType 'Automatic';
-New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
-```
+The provisioner:
 
-This enables immediate remote SSH execution via `manage-vms.sh exec` and file copying via `manage-vms.sh copy-to`.
+1. Locates the `UNATTEND` and VirtIO volumes by label.
+2. Installs the architecture-matched VirtIO network driver.
+3. Installs the bundled OpenSSH MSI without depending on Windows Update.
+4. configures `sshd` for automatic startup, the firewall rule, and Windows PowerShell as the default SSH shell.
+5. Removes automatic-logon credentials and writes `C:\ProgramData\vm-stack\provisioned` before starting `sshd`.
+
+`create-windows-vm.sh` does not treat an open TCP port alone as success. It waits for an SSH protocol banner and then reads the provisioning marker through `manage-vms.sh exec`. The Windows guest is therefore ready for managed execution when the creator exits successfully.
+
+## 5. OOBE Automation
+
+The answer file supplies locale settings and creates the requested local administrator in the supported `oobeSystem` configuration. It hides the applicable OOBE pages without using the deprecated `SkipMachineOOBE` setting. A fresh acceptance run must reach SSH readiness without keyboard or mouse input; an interactive OOBE screen is a provisioning failure, not an invitation to advance it manually.

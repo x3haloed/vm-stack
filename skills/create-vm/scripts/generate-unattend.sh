@@ -7,6 +7,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Terminal styling
 if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && [[ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]]; then
   BOLD=$(tput bold); DIM=$(tput dim); RESET=$(tput sgr0)
@@ -31,6 +33,7 @@ ${BOLD}Options:${RESET}
   -u, --username <user>      Default local admin username [default: admin]
   -p, --password <pass>      Default local admin password [default: admin]
   -n, --hostname <name>      Computer hostname [default: WINDOWS-VM]
+  --openssh-msi <path>       Checksum-verified OpenSSH MSI to bundle for offline provisioning
   --xml-only <path>          Output raw autounattend.xml file only (skip ISO)
   -h, --help                 Show this help message
 EOF
@@ -44,6 +47,7 @@ PASSWORD="admin"
 HOSTNAME="WINDOWS-VM"
 TARGET_ARCH="arm64"
 PRODUCT_KEY="VK7JG-NPHTM-C97JM-9MPGT-3V66T"
+OPENSSH_MSI=""
 
 # Auto-detect architecture
 host_m="$(uname -m 2>/dev/null || echo "arm64")"
@@ -81,6 +85,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -k|--key|--product-key)
       PRODUCT_KEY="$2"
+      shift 2
+      ;;
+    --openssh-msi)
+      OPENSSH_MSI="$2"
       shift 2
       ;;
     --xml-only)
@@ -234,6 +242,12 @@ generate_xml_content() {
 
     <!-- Pass 7: OOBE System (Local Account + OpenSSH / WinRM Setup) -->
     <settings pass="oobeSystem">
+        <component name="Microsoft-Windows-International-Core" processorArchitecture="${TARGET_ARCH}" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/StateMachine" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <InputLocale>en-US</InputLocale>
+            <SystemLocale>en-US</SystemLocale>
+            <UILanguage>en-US</UILanguage>
+            <UserLocale>en-US</UserLocale>
+        </component>
         <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="${TARGET_ARCH}" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/StateMachine" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
             <AutoLogon>
                 <Password>
@@ -245,22 +259,17 @@ generate_xml_content() {
                 <Username>${USERNAME}</Username>
             </AutoLogon>
             <FirstLogonCommands>
-                <!-- Enable OpenSSH Server on First Boot -->
                 <SynchronousCommand wcm:action="add">
-                    <CommandLine>powershell -ExecutionPolicy Bypass -Command "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0; Start-Service sshd; Set-Service -Name sshd -StartupType 'Automatic'; New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22"</CommandLine>
-                    <Description>Enable OpenSSH Server</Description>
+                    <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "\$d=(Get-Volume -FileSystemLabel UNATTEND).DriveLetter; . (\$d + ':\provision-windows.ps1')"</CommandLine>
+                    <Description>Provision vm-stack guest drivers and management access</Description>
                     <Order>1</Order>
-                </SynchronousCommand>
-                <!-- Configure WinRM -->
-                <SynchronousCommand wcm:action="add">
-                    <CommandLine>powershell -ExecutionPolicy Bypass -Command "Set-NetFirewallRule -DisplayGroup 'Windows Remote Management' -Enabled True -ErrorAction SilentlyContinue"</CommandLine>
-                    <Description>Enable WinRM Firewall Rules</Description>
-                    <Order>2</Order>
+                    <RequiresUserInput>false</RequiresUserInput>
                 </SynchronousCommand>
             </FirstLogonCommands>
             <OOBE>
                 <HideEULAPage>true</HideEULAPage>
                 <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+                <HideLocalAccountScreen>true</HideLocalAccountScreen>
                 <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
                 <NetworkLocation>Work</NetworkLocation>
                 <ProtectYourPC>3</ProtectYourPC>
@@ -296,11 +305,18 @@ if [[ -n "$XML_ONLY" ]]; then
   exit 0
 fi
 
+if [[ -z "$OPENSSH_MSI" || ! -f "$OPENSSH_MSI" ]]; then
+  log_error "A valid --openssh-msi path is required when building unattended media."
+  exit 2
+fi
+
 # Build unattend.iso
 mkdir -p "$(dirname "$OUTPUT_ISO")" 2>/dev/null || true
 rm -f "$OUTPUT_ISO"
 TEMP_ISO_DIR="$(mktemp -d -t vm_unattend_XXXXXX)"
 generate_xml_content > "$TEMP_ISO_DIR/autounattend.xml"
+cp "$SCRIPT_DIR/provision-windows.ps1" "$TEMP_ISO_DIR/provision-windows.ps1"
+cp "$OPENSSH_MSI" "$TEMP_ISO_DIR/openssh.msi"
 
 log_info "Building unattend ISO (${TARGET_ARCH}) -> $OUTPUT_ISO"
 

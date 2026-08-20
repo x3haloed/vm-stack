@@ -11,7 +11,7 @@ Authoritative procedural guide and tooling for creating, provisioning, and autom
 - Linux Cloud-Init Guide: [references/cloud-init-linux.md](references/cloud-init-linux.md)
 - Desktop Wizard Helper: [scripts/launch-terminal.sh](scripts/launch-terminal.sh)
 
-Covers automated media acquisition, unattended installation (`autounattend.xml` / `cloud-init`), UEFI NVRAM firmware handling, TPM/SecureBoot bypasses, and interactive desktop wizard fallbacks when human intervention is needed.
+Covers automated media acquisition, unattended installation (`autounattend.xml` / `cloud-init`), UEFI NVRAM firmware handling, TPM/SecureBoot bypasses, deterministic offline guest provisioning, and interactive desktop wizard fallbacks when media acquisition genuinely needs human intervention.
 
 ---
 
@@ -63,7 +63,8 @@ When a user asks to create or start a VM (e.g. *"I want you to start a Windows V
                       +──────────────────────────+
                       | 4. Generate Unattend ISO |
                       |    generate-unattend.sh  |
-                      |    (TPM/RAM bypass, SSH) |
+                      |    (answer file + offline|
+                      |     guest provisioner)  |
                       +─────────────┬────────────+
                                     │
                                     ▼
@@ -130,14 +131,15 @@ Run the automated Windows creator script:
 This single command executes the complete unattended pipeline:
 1. Allocates and registers the VM in `~/.config/vm-stack/vms.json` via `manage-vms.sh`.
 2. Initializes the per-VM UEFI NVRAM variable store (`~/.config/vm-stack/images/<name>_vars.fd`).
-3. Generates `autounattend.xml` with `LabConfig` bypasses (`BypassTPMCheck=1`, `BypassSecureBootCheck=1`, `BypassRAMCheck=1`, `BypassCPUCheck=1`, `BypassStorageCheck=1`), automatic partition formatting, default local admin account (`admin`/`admin`), OOBE bypass, and OpenSSH server enablement.
+3. Fetches a pinned, checksum-verified Win32-OpenSSH MSI and generates an unattended ISO containing `autounattend.xml`, the MSI, and `provision-windows.ps1`. The answer file supplies `LabConfig` bypasses, automatic partitioning, the requested local administrator, locale settings, and supported OOBE automation.
 4. Launches QEMU with:
    - `-accel hvf`
    - `-device nvme,drive=hd0` (enables inbox Windows NVMe storage driver)
    - `-device usb-storage,drive=win_iso` (attaches Windows ISO as native USB media so WinPE never throws missing CD/DVD driver errors)
    - `-device usb-storage,drive=virtio_iso` (provides VirtIO network and balloon drivers with automated search paths)
-   - `-device usb-storage,drive=unattend_iso` (provides zero-touch `autounattend.xml` answer file on USB drive root)
+   - `-device usb-storage,drive=unattend_iso` (provides the answer file, offline OpenSSH package, and the single guest provisioner)
    - Port forwarding: Host `2222` -> Guest `22` (SSH), Host `3389` -> Guest `3389` (RDP).
+5. Recovers a missed optical-boot prompt through the managed QMP console when needed, waits for a real SSH banner, and verifies `C:\ProgramData\vm-stack\provisioned` before reporting success. Use `--no-wait` only when the caller explicitly wants asynchronous creation.
 
 ---
 
@@ -181,7 +183,8 @@ When human assistance is needed (such as downloading a Windows ISO from Microsof
 | Script | Purpose |
 | :--- | :--- |
 | **[scripts/launch-terminal.sh](scripts/launch-terminal.sh)** | Spawns any wizard or command in a visible desktop GUI terminal (Terminal.app / iTerm2) for the human user. |
-| **[scripts/fetch-media.sh](scripts/fetch-media.sh)** | Downloads and manages ISOs, VirtIO drivers, and cloud images in `~/.config/vm-stack/media/`. |
-| **[scripts/generate-unattend.sh](scripts/generate-unattend.sh)** | Generates Windows `autounattend.xml` with TPM/SecureBoot bypasses, user credentials, and builds `unattend.iso`. |
+| **[scripts/fetch-media.sh](scripts/fetch-media.sh)** | Downloads and manages ISOs, VirtIO drivers, pinned Win32-OpenSSH installers, and cloud images in `~/.config/vm-stack/media/`. |
+| **[scripts/generate-unattend.sh](scripts/generate-unattend.sh)** | Generates the Windows answer file and packages it with the offline guest provisioner and OpenSSH MSI. |
+| **[scripts/provision-windows.ps1](scripts/provision-windows.ps1)** | Sole guest-provisioning authority for VirtIO networking, OpenSSH, firewall/default shell configuration, and the readiness marker. |
 | **[scripts/create-windows-vm.sh](scripts/create-windows-vm.sh)** | End-to-end automated runner for Windows 11/10 unattended QEMU provisioning. |
 | **[scripts/create-vm-wizard.sh](scripts/create-vm-wizard.sh)** | Interactive multi-stage terminal setup wizard for human-guided media and VM creation. |

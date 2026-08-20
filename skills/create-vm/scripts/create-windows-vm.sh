@@ -56,6 +56,8 @@ ${BOLD}Options:${RESET}
   --ssh-port <port>          Host port forwarding for SSH [default: 2222]
   --rdp-port <port>          Host port forwarding for RDP [default: 3389]
   --display <mode>           Display mode (default, cocoa, vnc, none) [default: default]
+  --ready-timeout <seconds>  Wait this long for completed SSH provisioning [default: 1800]
+  --no-wait                  Return after starting installation instead of verifying provisioning
   --dry-run                  Print generated QEMU command without executing
   -h, --help                 Show this help message
 EOF
@@ -73,6 +75,8 @@ SSH_PORT="2222"
 RDP_PORT="3389"
 DISPLAY_MODE="default"
 DRY_RUN=0
+READY_TIMEOUT=1800
+WAIT_FOR_READY=1
 
 if [[ $# -eq 0 ]]; then
   show_help
@@ -119,6 +123,14 @@ while [[ $# -gt 0 ]]; do
     --display)
       DISPLAY_MODE="$2"
       shift 2
+      ;;
+    --ready-timeout)
+      READY_TIMEOUT="$2"
+      shift 2
+      ;;
+    --no-wait)
+      WAIT_FOR_READY=0
+      shift
       ;;
     --dry-run)
       DRY_RUN=1
@@ -201,6 +213,12 @@ if [[ ! -f "$VIRTIO_ISO" ]]; then
   "$FETCH_MEDIA_SCRIPT" virtio-win 2>/dev/null || log_warn "Could not download virtio-win.iso (offline or unreachable). Continuing without it."
 fi
 
+OPENSSH_MSI="$MEDIA_DIR/openssh-${QEMU_ARCH}.msi"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  log_info "Ensuring checksum-verified Microsoft OpenSSH media is cached..."
+  "$FETCH_MEDIA_SCRIPT" openssh-win "$QEMU_ARCH" >/dev/null
+fi
+
 # 1. Authoritatively create the VM via manage-vms.sh
 log_info "Creating and registering VM '$VM_NAME' in vm-stack registry..."
 mkdir -p "$IMAGES_DIR" "$MEDIA_DIR"
@@ -241,7 +259,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     --arch "$([[ "$QEMU_ARCH" = "aarch64" ]] && echo "arm64" || echo "amd64")" \
     --username "$USERNAME" \
     --password "$PASSWORD" \
-    --hostname "WIN-${VM_NAME}"
+    --hostname "WIN-${VM_NAME}" \
+    --openssh-msi "$OPENSSH_MSI"
 fi
 
 # 4. Assemble QEMU Command
@@ -364,4 +383,17 @@ if [[ "$QEMU_ARCH" = "aarch64" ]]; then
   fi
 fi
 
-log_info "Windows installation session started for '$VM_NAME'."
+if [[ "$WAIT_FOR_READY" -eq 1 ]]; then
+  log_info "Waiting for Windows provisioning to expose SSH (timeout: ${READY_TIMEOUT}s)..."
+  if ! "$MANAGE_VMS_SCRIPT" wait-ready "$VM_NAME" --timeout "$READY_TIMEOUT"; then
+    DIAGNOSTIC_FRAME="$RUN_DIR/${VM_NAME}-provisioning-timeout.ppm"
+    "$MANAGE_VMS_SCRIPT" screenshot "$VM_NAME" --output "$DIAGNOSTIC_FRAME" >/dev/null 2>&1 || true
+    log_error "Windows provisioning did not become ready. Guest framebuffer: $DIAGNOSTIC_FRAME"
+    exit 1
+  fi
+  "$MANAGE_VMS_SCRIPT" exec "$VM_NAME" --user "$USERNAME" --password "$PASSWORD" -- \
+    "if ((Get-Content -LiteralPath C:\\ProgramData\\vm-stack\\provisioned -ErrorAction SilentlyContinue) -ne 'ok') { exit 1 }"
+  log_info "Windows VM '$VM_NAME' is provisioned and ready for managed execution."
+else
+  log_info "Windows installation session started for '$VM_NAME'."
+fi

@@ -45,6 +45,7 @@ Manages VM installation media in ${DIM}$MEDIA_DIR/${RESET}
 
 ${BOLD}Commands:${RESET}
   ${BLUE}virtio-win${RESET}               Download latest stable Red Hat VirtIO Windows drivers ISO
+  ${BLUE}openssh-win${RESET} [arch]       Download checksum-pinned Microsoft OpenSSH MSI
   ${BLUE}ubuntu${RESET} [arch]            Download latest Ubuntu Server cloud image (.img)
   ${BLUE}debian${RESET} [arch]            Download latest Debian genericcloud image (.qcow2)
   ${BLUE}alpine${RESET} [arch]            Download latest Alpine Linux virtual image (.qcow2)
@@ -85,6 +86,29 @@ download_file() {
   log_info "Download complete: $dest"
 }
 
+sha256_file() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    openssl dgst -sha256 "$1" | awk '{print $NF}'
+  fi
+}
+
+verify_sha256() {
+  local file="$1"
+  local expected="$2"
+  local actual
+  actual="$(sha256_file "$file")"
+  if [[ "$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')" ]]; then
+    log_error "SHA-256 mismatch for $file"
+    log_error "Expected: $expected"
+    log_error "Actual:   $actual"
+    return 1
+  fi
+}
+
 fetch_virtio_win() {
   local force=0
   [[ "${1:-}" = "--force" ]] && force=1
@@ -93,6 +117,36 @@ fetch_virtio_win() {
   local url="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso"
   local dest="$MEDIA_DIR/virtio-win.iso"
   download_file "$url" "$dest" "$force"
+}
+
+fetch_openssh_win() {
+  local arch="${1:-$(get_host_arch)}"
+  local force=0
+  [[ "${2:-}" = "--force" ]] && force=1
+
+  ensure_media_dir
+  local release="10.0.0.0p2-Preview"
+  local asset checksum dest
+  case "$arch" in
+    aarch64|arm64)
+      asset="OpenSSH-ARM64-v10.0.0.0.msi"
+      checksum="7a17d0e22d004fb47ca4bfd8fef926fa305de4ebf70a6f3c7a29c39aabef0023"
+      ;;
+    x86_64|amd64)
+      asset="OpenSSH-Win64-v10.0.0.0.msi"
+      checksum="ddec9c53864280759cf9f74791cefd387100e3946aa849a1c138a4ed1b96b7d9"
+      ;;
+    *)
+      log_error "Unsupported Windows OpenSSH architecture: $arch"
+      return 2
+      ;;
+  esac
+
+  dest="$MEDIA_DIR/openssh-${arch}.msi"
+  download_file "https://github.com/PowerShell/Win32-OpenSSH/releases/download/${release}/${asset}" "$dest" "$force"
+  verify_sha256 "$dest" "$checksum"
+  log_info "Verified Microsoft OpenSSH package: $dest"
+  printf '%s\n' "$dest"
 }
 
 fetch_ubuntu() {
@@ -164,6 +218,9 @@ shift
 case "$CMD" in
   virtio-win|virtio)
     fetch_virtio_win "$@"
+    ;;
+  openssh-win|openssh)
+    fetch_openssh_win "$@"
     ;;
   ubuntu)
     fetch_ubuntu "$@"
