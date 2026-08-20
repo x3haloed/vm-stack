@@ -156,8 +156,12 @@ Create subsequent VMs as thin overlays:
 
 ```bash
 ./skills/create-vm/scripts/create-windows-from-base.sh windows11-arm64-base <new-vm> \
+  --purpose "Validate the Windows shim" \
+  --release-when "Validation evidence has been captured" \
   --user admin --password admin
 ```
+
+Purpose and release condition are required. Clones are disposable unless `--retained` is explicit. When the release condition becomes true, preserve the needed transcript, hashes, screenshots, or other evidence outside the guest and immediately run `manage-vms.sh release <vm>`.
 
 The clone receives private writable disk and firmware state. Windows specializes a fresh machine identity, generates new SSH host keys, writes the readiness marker, and exposes SSH. The host then retries activation after networking is usable, persists the output in `C:\ProgramData\vm-stack\activation.log`, and reports the resulting state. Activation failure does not make an otherwise functional test VM unready, but it must remain visible to the caller. An inherited activation state is neither guaranteed to activate another virtual device nor authorization to run more Windows instances; licensing remains the operator's responsibility.
 

@@ -50,7 +50,9 @@ ${BOLD}QEMU & Disk Management (Bound to Registry):${RESET}
   ${BLUE}seal-base${RESET} <vm> <base> [options] Capture a stopped, generalized VM as an immutable base
   ${BLUE}create-from-base${RESET} <base> <name>  Create a thin writable VM overlay from a sealed base
   ${BLUE}delete-base${RESET} <base>             Delete an unused sealed base and its metadata
+  ${BLUE}compact-base${RESET} <base>            Compress an unused sealed base transactionally
   ${BLUE}delete${RESET} <name> [options]         Delete VM registry entry and remove disk file
+  ${BLUE}release${RESET} <name>                  Stop and delete a disposable VM whose purpose is satisfied
   ${BLUE}snapshot${RESET} <name> <action> [...]    Manage internal disk snapshots (create, list, rollback, delete)
 
 ${BOLD}VM Lifecycle & Execution:${RESET}
@@ -101,6 +103,11 @@ ${BOLD}Options for 'start':${RESET}
   --cpus <n>                 Override CPU core count for this run
   --extra-args <args>        Additional QEMU arguments for this invocation
   --dry-run                  Print assembled QEMU command without executing
+
+${BOLD}Options for 'create-from-base':${RESET}
+  --purpose <text>           Required statement of why the VM exists
+  --release-when <condition> Required observable condition for releasing it
+  --retained                 Keep after purpose completion (default: disposable)
 
 ${BOLD}Options for 'exec':${RESET}
   manage-vms.sh exec <name> [--user <user>] [--password <pass>] [--timeout <sec>] -- <cmd...>
@@ -411,6 +418,9 @@ def synthesize_vm_info(vm_spec):
         "rdp_port": vm_spec.get("rdp_port", 3389),
         "extra_args": vm_spec.get("extra_args", ""),
         "description": vm_spec.get("description", ""),
+        "retention": vm_spec.get("retention", "retained"),
+        "purpose": vm_spec.get("purpose"),
+        "release_when": vm_spec.get("release_when"),
         "created_at": vm_spec.get("created_at"),
         "updated_at": vm_spec.get("updated_at"),
         "disk": disk_info,
@@ -772,7 +782,7 @@ elif action == "seal-base":
     if os.path.exists(base_disk) or os.path.exists(metadata_path):
         print(f"[ERROR] Sealed base '{base_name}' already exists.", file=sys.stderr)
         sys.exit(3)
-    subprocess.run(["qemu-img", "convert", "-O", "qcow2", source_vm["disk"], base_disk], check=True)
+    subprocess.run(["qemu-img", "convert", "-c", "-O", "qcow2", source_vm["disk"], base_disk], check=True)
     os.chmod(base_disk, 0o444)
     source_vars = os.path.join(images_dir, f"{source_name}_vars.fd")
     base_vars = os.path.join(templates_dir, f"{base_name}_vars.fd")
@@ -804,6 +814,9 @@ elif action == "create-from-base":
     parser.add_argument("--memory", default=None)
     parser.add_argument("--cpus", type=int, default=None)
     parser.add_argument("--description", default="")
+    parser.add_argument("--purpose", required=True, help="Why this VM exists")
+    parser.add_argument("--release-when", required=True, help="Observable condition after which the VM should be released")
+    parser.add_argument("--retained", action="store_true", help="Keep after purpose completion; disposable is the default")
     parsed = parser.parse_args(args)
     data = load_registry()
     name = parsed.name.strip()
@@ -852,7 +865,11 @@ elif action == "create-from-base":
         "memory": parsed.memory or spec.get("memory", "4G"), "accel": spec.get("accel", get_default_accel()),
         "ssh_port": ssh_port, "rdp_port": rdp_port, "extra_args": spec.get("extra_args", ""),
         "description": parsed.description or f"Thin clone of sealed base {parsed.base_name}",
-        "base_template": parsed.base_name, "created_at": get_utc_iso(), "updated_at": get_utc_iso()
+        "base_template": parsed.base_name,
+        "retention": "retained" if parsed.retained else "disposable",
+        "purpose": parsed.purpose,
+        "release_when": parsed.release_when,
+        "created_at": get_utc_iso(), "updated_at": get_utc_iso()
     }
     save_registry(data)
     print(f"[INFO] Created thin VM '{name}' from sealed base '{parsed.base_name}' (SSH port: {ssh_port}, RDP port: {rdp_port}).")
@@ -882,8 +899,41 @@ elif action == "delete-base":
     print(f"[INFO] Deleted sealed base '{parsed.base_name}'.")
     sys.exit(0)
 
-elif action == "delete":
-    parser = argparse.ArgumentParser(prog="manage-vms delete")
+elif action == "compact-base":
+    parser = argparse.ArgumentParser(prog="manage-vms compact-base")
+    parser.add_argument("base_name")
+    parsed = parser.parse_args(args)
+    data = load_registry()
+    dependents = [name for name, vm in data["vms"].items() if vm.get("base_template") == parsed.base_name]
+    if dependents:
+        print(f"[ERROR] Cannot compact base '{parsed.base_name}' while used by: {', '.join(sorted(dependents))}", file=sys.stderr)
+        sys.exit(1)
+    metadata_path = os.path.join(templates_dir, f"{parsed.base_name}.json")
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+    except Exception as exc:
+        print(f"[ERROR] Could not read sealed base '{parsed.base_name}': {exc}", file=sys.stderr)
+        sys.exit(2)
+    base_disk = metadata.get("disk")
+    if not base_disk or not os.path.exists(base_disk):
+        print(f"[ERROR] Sealed base disk is missing: {base_disk}", file=sys.stderr)
+        sys.exit(1)
+    temp_disk = f"{base_disk}.compact.{os.getpid()}"
+    before = os.path.getsize(base_disk)
+    try:
+        subprocess.run(["qemu-img", "convert", "-c", "-O", "qcow2", base_disk, temp_disk], check=True)
+        os.chmod(temp_disk, 0o444)
+        os.replace(temp_disk, base_disk)
+    finally:
+        if os.path.exists(temp_disk):
+            os.remove(temp_disk)
+    after = os.path.getsize(base_disk)
+    print(f"[INFO] Compacted sealed base '{parsed.base_name}' from {format_size(before)} to {format_size(after)}.")
+    sys.exit(0)
+
+elif action in ["delete", "release"]:
+    parser = argparse.ArgumentParser(prog=f"manage-vms {action}")
     parser.add_argument("name")
     parser.add_argument("--keep-disk", action="store_true")
     parser.add_argument("-f", "--force", action="store_true")
@@ -896,10 +946,28 @@ elif action == "delete":
         print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
         sys.exit(2)
 
+    if action == "release":
+        if data["vms"][name].get("retention", "retained") != "disposable":
+            print(f"[ERROR] VM '{name}' is retained. Use delete explicitly if removal is intended.", file=sys.stderr)
+            sys.exit(1)
+        parsed.keep_disk = False
+
     # If running, stop or error
     rt = probe_vm_runtime(name, data["vms"][name].get("disk"))
     if rt["is_running"]:
-        if parsed.force:
+        if action == "release":
+            print(f"[INFO] Gracefully stopping disposable VM '{name}' (PID {rt['pid']})...")
+            try:
+                os.kill(rt["pid"], signal.SIGTERM)
+                for _ in range(25):
+                    if not is_process_running(rt["pid"]):
+                        break
+                    time.sleep(0.2)
+                if is_process_running(rt["pid"]):
+                    os.kill(rt["pid"], signal.SIGKILL)
+            except Exception:
+                pass
+        elif parsed.force:
             print(f"[INFO] VM '{name}' is running (PID {rt['pid']}). Terminating...")
             try:
                 os.kill(rt["pid"], signal.SIGKILL)
@@ -932,7 +1000,8 @@ elif action == "delete":
 
     del data["vms"][name]
     save_registry(data)
-    print(f"[INFO] Deleted VM '{name}' from inventory.")
+    verb = "Released disposable" if action == "release" else "Deleted"
+    print(f"[INFO] {verb} VM '{name}' from inventory.")
     sys.exit(0)
 
 elif action == "start":
@@ -1909,8 +1978,14 @@ case "$COMMAND" in
   delete-base)
     run_py_gateway "delete-base" "$@"
     ;;
+  compact-base)
+    run_py_gateway "compact-base" "$@"
+    ;;
   delete|rm|destroy|remove|unregister)
     run_py_gateway "delete" "$@"
+    ;;
+  release|complete|finish)
+    run_py_gateway "release" "$@"
     ;;
   start|run|boot)
     run_py_gateway "start" "$@"

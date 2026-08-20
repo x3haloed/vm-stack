@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANAGER="$SCRIPT_DIR/../../manage-vms/scripts/manage-vms.sh"
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: create-windows-from-base.sh <base-name> <vm-name> [--user <user>] [--password <pass>] [manager create options]" >&2
+  echo "Usage: create-windows-from-base.sh <base-name> <vm-name> --purpose <text> --release-when <condition> [--retained] [--user <user>] [--password <pass>]" >&2
   exit 2
 fi
 

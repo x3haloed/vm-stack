@@ -15,7 +15,7 @@ Authoritative QEMU and filesystem gateway for local virtual machine lifecycle ma
 ## Core Operational Rule for Agents
 
 > [!IMPORTANT]
-> **Always route VM disk operations (create, delete, rename, resize, clone, seal-base, create-from-base, delete-base, snapshot) and execution (start, stop, wait-ready, exec) through `manage-vms.sh`.**
+> **Always route VM disk operations (create, delete, rename, resize, clone, seal-base, create-from-base, delete-base, compact-base, snapshot) and execution (start, stop, wait-ready, exec) through `manage-vms.sh`.**
 > Never run raw `qemu-img` or `rm`/`mv` on VM disk files directly without routing through `manage-vms.sh`.
 > 
 > `manage-vms.sh` binds the physical QEMU disk and runtime process directly to the inventory in `~/.config/vm-stack/vms.json`, ensuring zero state drift.
@@ -25,6 +25,18 @@ Authoritative QEMU and filesystem gateway for local virtual machine lifecycle ma
 When the user asks `vm-stack` to create or manage a VM for a stated purpose, treat routine guest-local administration needed for that purpose as part of the requested work. This includes installing guest drivers or packages, enabling services, accepting guest-local elevation prompts, rebooting the guest, and changing disposable guest configuration. Do not repeatedly hand those operations back to the user merely because the same operation would be consequential on a user-owned host or workspace.
 
 This authority is bounded by the registered guest and its declared purpose. It does not authorize host changes outside `vm-stack`, access to unrelated user data, publication, external account changes, or destructive replacement of a non-disposable guest. Higher-level harness confirmation requirements still apply when they cannot be delegated by repository guidance.
+
+### Purpose-bound retention
+
+A VM is a working resource, not an artifact to retain by habit. Before creating a disposable VM, state why it exists and the observable condition that means its purpose has been served. Preserve durable evidence outside the guest, then release the VM in the same work loop. “It may be useful later” is not sufficient retention evidence; retain only an explicitly requested long-lived environment, an unresolved investigation that still depends on guest state, or a source not yet captured into a verified base.
+
+Sealed-base clones require `--purpose` and `--release-when` and default to `disposable`. Once the condition is satisfied:
+
+```bash
+./skills/manage-vms/scripts/manage-vms.sh release <vm-name>
+```
+
+`release` stops the guest, removes its writable disk and firmware state, and unregisters it. It refuses retained VMs so intentional long-lived state cannot be removed accidentally.
 
 ---
 
@@ -178,11 +190,14 @@ These are the manager-owned disk primitives used by the higher-level Windows sea
 ```bash
 ./skills/manage-vms/scripts/manage-vms.sh seal-base source-vm windows-base \
   --license-json ./base-license.json
-./skills/manage-vms/scripts/manage-vms.sh create-from-base windows-base new-windows-vm
+./skills/manage-vms/scripts/manage-vms.sh create-from-base windows-base new-windows-vm \
+  --purpose "Run compatibility check" \
+  --release-when "Result and logs are captured"
 ./skills/manage-vms/scripts/manage-vms.sh delete-base windows-base
+./skills/manage-vms/scripts/manage-vms.sh compact-base windows-base
 ```
 
-`delete-base` refuses to remove a base while registered VMs still depend on it.
+`delete-base` and `compact-base` refuse to operate while registered VMs still depend on the base. New sealed bases are compressed during capture; `compact-base` transactionally compresses an older base.
 
 For Windows, normally use `seal-windows-base.sh` and `create-windows-from-base.sh` from the `create-vm` skill so guest generalization and readiness checks remain part of the transaction.
 
