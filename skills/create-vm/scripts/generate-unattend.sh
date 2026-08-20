@@ -260,7 +260,6 @@ generate_xml_content() {
             </FirstLogonCommands>
             <OOBE>
                 <HideEULAPage>true</HideEULAPage>
-                <HideOEMRegistrationScreens>true</HideOEMRegistrationScreens>
                 <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
                 <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
                 <NetworkLocation>Work</NetworkLocation>

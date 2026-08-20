@@ -258,16 +258,24 @@ QEMU_CMD=(
   -device usb-tablet
   -drive file="$DISK_PATH",if=none,id=hd0,format=qcow2
   -device nvme,drive=hd0,serial=nvme0,bootindex=0
-  -device usb-storage,drive=win_iso,bootindex=1
-  -drive file="$ISO_PATH",if=none,id=win_iso,format=raw,media=cdrom,readonly=on
-  -device usb-storage,drive=unattend_iso
-  -drive file="$UNATTEND_ISO",if=none,id=unattend_iso,format=raw,media=cdrom,readonly=on
   -netdev user,id=net0,hostfwd=tcp::${SSH_PORT}-:22,hostfwd=tcp::${RDP_PORT}-:3389
 )
 
 if [[ "$QEMU_ARCH" = "aarch64" ]]; then
+  QEMU_CMD+=(
+    -device usb-storage,drive=unattend_iso
+    -drive file="$UNATTEND_ISO",if=none,id=unattend_iso,format=raw,media=cdrom,readonly=on
+    -device usb-storage,drive=win_iso,bootindex=1
+    -drive file="$ISO_PATH",if=none,id=win_iso,format=raw,media=cdrom,readonly=on
+  )
   QEMU_CMD+=(-device usb-net,netdev=net0)
 else
+  QEMU_CMD+=(
+    -device usb-storage,drive=win_iso,bootindex=1
+    -drive file="$ISO_PATH",if=none,id=win_iso,format=raw,media=cdrom,readonly=on
+    -device usb-storage,drive=unattend_iso
+    -drive file="$UNATTEND_ISO",if=none,id=unattend_iso,format=raw,media=cdrom,readonly=on
+  )
   QEMU_CMD+=(-device virtio-net-pci,netdev=net0)
 fi
 
@@ -304,12 +312,21 @@ log_info "Starting QEMU Windows installation..."
 log_info "Port Forwarding: Host :$SSH_PORT -> Guest :22 (SSH), Host :$RDP_PORT -> Guest :3389 (RDP)"
 log_info "Default Credentials: Username='$USERNAME', Password='$PASSWORD'"
 
-INSTALL_MEDIA_ARGS=(
-  -device usb-storage,drive=win_iso,bootindex=1
-  -drive "file=$ISO_PATH,if=none,id=win_iso,format=raw,media=cdrom,readonly=on"
-  -device usb-storage,drive=unattend_iso
-  -drive "file=$UNATTEND_ISO,if=none,id=unattend_iso,format=raw,media=cdrom,readonly=on"
-)
+if [[ "$QEMU_ARCH" = "aarch64" ]]; then
+  INSTALL_MEDIA_ARGS=(
+    -device usb-storage,drive=unattend_iso
+    -drive "file=$UNATTEND_ISO,if=none,id=unattend_iso,format=raw,media=cdrom,readonly=on"
+    -device usb-storage,drive=win_iso,bootindex=1
+    -drive "file=$ISO_PATH,if=none,id=win_iso,format=raw,media=cdrom,readonly=on"
+  )
+else
+  INSTALL_MEDIA_ARGS=(
+    -device usb-storage,drive=win_iso,bootindex=1
+    -drive "file=$ISO_PATH,if=none,id=win_iso,format=raw,media=cdrom,readonly=on"
+    -device usb-storage,drive=unattend_iso
+    -drive "file=$UNATTEND_ISO,if=none,id=unattend_iso,format=raw,media=cdrom,readonly=on"
+  )
+fi
 if [[ -f "$VIRTIO_ISO" ]]; then
   INSTALL_MEDIA_ARGS+=(
     -device usb-storage,drive=virtio_iso
@@ -319,7 +336,32 @@ fi
 
 printf -v INSTALL_EXTRA_ARGS '%q ' "${INSTALL_MEDIA_ARGS[@]}"
 "$MANAGE_VMS_SCRIPT" start "$VM_NAME" \
+  --daemon \
   --display "$DISPLAY_MODE" \
   --extra-args="$INSTALL_EXTRA_ARGS"
 
-log_info "Windows installation session finished for '$VM_NAME'."
+if [[ "$QEMU_ARCH" = "aarch64" ]]; then
+  log_info "Watching for the Windows ARM optical-boot prompt through the VM monitor..."
+  INITIAL_DISK_BYTES="$(wc -c < "$DISK_PATH" | tr -d ' ')"
+  for _ in {1..120}; do
+    "$MANAGE_VMS_SCRIPT" send-key "$VM_NAME" spc >/dev/null 2>&1 || true
+    sleep 0.5
+    CURRENT_DISK_BYTES="$(wc -c < "$DISK_PATH" | tr -d ' ')"
+    if [[ "$CURRENT_DISK_BYTES" -gt "$INITIAL_DISK_BYTES" ]]; then
+      log_info "Windows setup has started writing to the VM disk."
+      break
+    fi
+  done
+
+  CURRENT_DISK_BYTES="$(wc -c < "$DISK_PATH" | tr -d ' ')"
+  if [[ "$CURRENT_DISK_BYTES" -le "$INITIAL_DISK_BYTES" ]]; then
+    log_warn "Optical boot prompt was missed; invoking the ARM EFI loader from the UEFI shell."
+    "$MANAGE_VMS_SCRIPT" type-text "$VM_NAME" 'FS0:\EFI\BOOT\BOOTAA64.EFI' --enter
+    for _ in {1..20}; do
+      "$MANAGE_VMS_SCRIPT" send-key "$VM_NAME" spc >/dev/null 2>&1 || true
+      sleep 0.1
+    done
+  fi
+fi
+
+log_info "Windows installation session started for '$VM_NAME'."

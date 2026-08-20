@@ -233,7 +233,7 @@ def probe_disk_info(disk_path):
 
     try:
         res = subprocess.run(
-            ["qemu-img", "info", "--output=json", disk_path],
+            ["qemu-img", "info", "--force-share", "--output=json", disk_path],
             capture_output=True,
             text=True,
             check=True
@@ -269,6 +269,35 @@ def probe_disk_info(disk_path):
 def get_pid_file_path(vm_name):
     return os.path.join(run_dir, f"{vm_name}.pid")
 
+def get_qmp_socket_path(vm_name):
+    return os.path.join(run_dir, f"{vm_name}.qmp")
+
+def qmp_execute(vm_name, command, arguments=None, timeout=2.0):
+    qmp_path = get_qmp_socket_path(vm_name)
+    if not os.path.exists(qmp_path):
+        raise RuntimeError(f"QMP socket is not available for VM '{vm_name}'")
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+        conn.settimeout(timeout)
+        conn.connect(qmp_path)
+        stream = conn.makefile("rwb", buffering=0)
+        json.loads(stream.readline().decode("utf-8"))
+        stream.write((json.dumps({"execute": "qmp_capabilities"}) + "\n").encode("utf-8"))
+        while True:
+            response = json.loads(stream.readline().decode("utf-8"))
+            if "return" in response or "error" in response:
+                break
+        request = {"execute": command}
+        if arguments:
+            request["arguments"] = arguments
+        stream.write((json.dumps(request) + "\n").encode("utf-8"))
+        while True:
+            response = json.loads(stream.readline().decode("utf-8"))
+            if "return" in response:
+                return response["return"]
+            if "error" in response:
+                raise RuntimeError(response["error"].get("desc", str(response["error"])))
+
 def is_process_running(pid):
     if pid <= 0:
         return False
@@ -278,12 +307,21 @@ def is_process_running(pid):
     except OSError:
         return False
 
-def check_tcp_port(port, host="127.0.0.1", timeout=0.2):
+def check_ssh_service(port, host="127.0.0.1", timeout=0.5):
     if not port:
         return False
     try:
-        with socket.create_connection((host, int(port)), timeout=timeout):
-            return True
+        with socket.create_connection((host, int(port)), timeout=timeout) as conn:
+            # QEMU user networking accepts the forwarded TCP connection even
+            # before a guest is listening. Require the SSH identification
+            # string so runtime readiness reflects the guest service itself.
+            banner = b""
+            while len(banner) < 255 and b"\n" not in banner:
+                chunk = conn.recv(255 - len(banner))
+                if not chunk:
+                    break
+                banner += chunk
+            return banner.startswith(b"SSH-")
     except Exception:
         return False
 
@@ -335,7 +373,7 @@ def probe_vm_runtime(vm_name, disk_path=None, ssh_port=None):
 
     ssh_ready = False
     if is_alive and ssh_port:
-        ssh_ready = check_tcp_port(ssh_port)
+        ssh_ready = check_ssh_service(ssh_port)
 
     status_str = "running" if is_alive else "stopped"
     return {
@@ -791,6 +829,9 @@ elif action == "start":
     network_device = "usb-net" if arch == "aarch64" and vm.get("os", "").lower() == "windows" else "virtio-net-pci"
 
     # Assemble base command
+    qmp_path = get_qmp_socket_path(name)
+    if os.path.exists(qmp_path):
+        os.remove(qmp_path)
     cmd = [
         qemu_bin,
         "-accel", accel,
@@ -803,7 +844,8 @@ elif action == "start":
         "-drive", f"file={disk_path},if=none,id=hd0,format=qcow2",
         "-device", "nvme,drive=hd0,serial=nvme0,bootindex=0",
         "-netdev", f"user,id=net0,hostfwd=tcp::{ssh_p}-:22,hostfwd=tcp::{rdp_p}-:3389",
-        "-device", f"{network_device},netdev=net0"
+        "-device", f"{network_device},netdev=net0",
+        "-qmp", f"unix:{qmp_path},server=on,wait=off"
     ]
 
     if parsed.snapshot:
@@ -886,7 +928,87 @@ elif action == "start":
             if os.path.exists(pid_file):
                 try: os.remove(pid_file)
                 except Exception: pass
+            if os.path.exists(qmp_path):
+                try: os.remove(qmp_path)
+                except Exception: pass
         sys.exit(0)
+
+elif action == "send-key":
+    parser = argparse.ArgumentParser(prog="manage-vms send-key")
+    parser.add_argument("name")
+    parser.add_argument("key", help="QEMU key name, for example spc, ret, or esc")
+    parsed = parser.parse_args(args)
+
+    data = load_registry()
+    name = parsed.name.strip()
+    if name not in data["vms"]:
+        print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+    try:
+        qmp_execute(name, "send-key", {"keys": [{"type": "qcode", "data": parsed.key}]})
+        print(f"[INFO] Sent key '{parsed.key}' to VM '{name}'.")
+        sys.exit(0)
+    except Exception as e:
+        print(f"[ERROR] Could not send key to VM '{name}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+elif action == "type-text":
+    parser = argparse.ArgumentParser(prog="manage-vms type-text")
+    parser.add_argument("name")
+    parser.add_argument("text")
+    parser.add_argument("--enter", action="store_true")
+    parsed = parser.parse_args(args)
+
+    data = load_registry()
+    name = parsed.name.strip()
+    if name not in data["vms"]:
+        print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+
+    punctuation = {
+        "\\": ["backslash"], ".": ["dot"], "-": ["minus"],
+        ":": ["shift", "semicolon"], "/": ["slash"], " ": ["spc"]
+    }
+    try:
+        for char in parsed.text:
+            if char.isalpha():
+                keys = ["shift", char.lower()] if char.isupper() else [char]
+            elif char.isdigit():
+                keys = [char]
+            elif char in punctuation:
+                keys = punctuation[char]
+            else:
+                raise RuntimeError(f"Unsupported character for QMP typing: {char!r}")
+            qmp_execute(name, "send-key", {"keys": [{"type": "qcode", "data": key} for key in keys]})
+            time.sleep(0.02)
+        if parsed.enter:
+            qmp_execute(name, "send-key", {"keys": [{"type": "qcode", "data": "ret"}]})
+        print(f"[INFO] Typed text into VM '{name}'.")
+        sys.exit(0)
+    except Exception as e:
+        print(f"[ERROR] Could not type text into VM '{name}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+elif action == "screenshot":
+    parser = argparse.ArgumentParser(prog="manage-vms screenshot")
+    parser.add_argument("name")
+    parser.add_argument("--output", required=True, help="Destination PPM image path")
+    parsed = parser.parse_args(args)
+
+    data = load_registry()
+    name = parsed.name.strip()
+    if name not in data["vms"]:
+        print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+    output_path = os.path.abspath(os.path.expanduser(parsed.output))
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    try:
+        qmp_execute(name, "screendump", {"filename": output_path})
+        print(output_path)
+        sys.exit(0)
+    except Exception as e:
+        print(f"[ERROR] Could not capture VM '{name}': {e}", file=sys.stderr)
+        sys.exit(1)
 
 elif action == "stop":
     parser = argparse.ArgumentParser(prog="manage-vms stop")
@@ -1599,6 +1721,15 @@ case "$COMMAND" in
     ;;
   start|run|boot)
     run_py_gateway "start" "$@"
+    ;;
+  send-key|key)
+    run_py_gateway "send-key" "$@"
+    ;;
+  type-text|type)
+    run_py_gateway "type-text" "$@"
+    ;;
+  screenshot|capture)
+    run_py_gateway "screenshot" "$@"
     ;;
   stop|halt|kill|shutdown)
     run_py_gateway "stop" "$@"
