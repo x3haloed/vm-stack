@@ -1,6 +1,6 @@
 ---
 name: manage-vms
-description: Use when creating, starting, stopping, checking live status, importing, renaming, resizing, cloning, snapshotting, inspecting, listing, executing commands in, transferring files to, or deleting local virtual machines in vm-stack.
+description: Use when creating, starting, stopping, checking live status, importing, renaming, resizing, cloning, sealing reusable bases, creating thin template overlays, snapshotting, inspecting, listing, executing commands in, transferring files to, or deleting local virtual machines in vm-stack.
 ---
 
 # Manage VMs
@@ -15,7 +15,7 @@ Authoritative QEMU and filesystem gateway for local virtual machine lifecycle ma
 ## Core Operational Rule for Agents
 
 > [!IMPORTANT]
-> **Always route VM disk operations (create, delete, rename, resize, clone, snapshot) and execution (start, stop, wait-ready, exec) through `manage-vms.sh`.**
+> **Always route VM disk operations (create, delete, rename, resize, clone, seal-base, create-from-base, delete-base, snapshot) and execution (start, stop, wait-ready, exec) through `manage-vms.sh`.**
 > Never run raw `qemu-img` or `rm`/`mv` on VM disk files directly without routing through `manage-vms.sh`.
 > 
 > `manage-vms.sh` binds the physical QEMU disk and runtime process directly to the inventory in `~/.config/vm-stack/vms.json`, ensuring zero state drift.
@@ -171,17 +171,32 @@ Use the manager-owned QEMU monitor when a guest is still in firmware, installati
 ./skills/manage-vms/scripts/manage-vms.sh resize dev-ubuntu +10G
 ```
 
-### 14. Rename a VM (`rename`)
+### 14. Manage Sealed Bases (`seal-base` / `create-from-base`)
+
+These are the manager-owned disk primitives used by the higher-level Windows sealing scripts. `seal-base` requires a stopped, already-generalized source and licensing metadata. `create-from-base` creates a private QCOW2 overlay and private writable firmware state:
+
+```bash
+./skills/manage-vms/scripts/manage-vms.sh seal-base source-vm windows-base \
+  --license-json ./base-license.json
+./skills/manage-vms/scripts/manage-vms.sh create-from-base windows-base new-windows-vm
+./skills/manage-vms/scripts/manage-vms.sh delete-base windows-base
+```
+
+`delete-base` refuses to remove a base while registered VMs still depend on it.
+
+For Windows, normally use `seal-windows-base.sh` and `create-windows-from-base.sh` from the `create-vm` skill so guest generalization and readiness checks remain part of the transaction.
+
+### 15. Rename a VM (`rename`)
 ```bash
 ./skills/manage-vms/scripts/manage-vms.sh rename dev-ubuntu staging-ubuntu
 ```
 
-### 15. Delete a VM (`delete`)
+### 16. Delete a VM (`delete`)
 ```bash
 ./skills/manage-vms/scripts/manage-vms.sh delete dev-worker-1
 ```
 
-### 16. Audit & Reconcile (`sync`)
+### 17. Audit & Reconcile (`sync`)
 ```bash
 ./skills/manage-vms/scripts/manage-vms.sh sync --prune
 ```

@@ -61,3 +61,11 @@ The provisioner:
 ## 5. OOBE Automation
 
 The answer file supplies locale settings and creates the requested local administrator in the supported `oobeSystem` configuration. It hides the applicable OOBE pages without using the deprecated `SkipMachineOOBE` setting. A fresh acceptance run must reach SSH readiness without keyboard or mouse input; an interactive OOBE screen is a provisioning failure, not an invitation to advance it manually.
+
+## 6. Sealed Bases and Licensing
+
+A sealed base is a generalized, immutable QCOW2 image plus immutable firmware state and JSON metadata. It is not a running snapshot. Each VM created from it owns a small writable overlay and a writable copy of firmware variables.
+
+Before sealing, `prepare-windows-base.ps1` records the Windows edition, channel, `LicenseStatus`, remaining grace time, whether the SKU is Evaluation media, and a computed expiration when available. Evaluation media is refused by default. `manage-vms.sh create-from-base` rejects an expired base and warns when fewer than 14 days remain.
+
+Sysprep removes machine-specific Windows state. Clone specialization runs under SYSTEM, retains the VirtIO installation, generates new OpenSSH host keys, creates the readiness marker, and only then starts `sshd`. Activation is retried after SSH proves networking is available because activation during the specialize pass can be too early. Its output is persisted at `C:\ProgramData\vm-stack\activation.log` and printed by the creator. Activation failure is reported separately from VM readiness: a clone may be technically usable while Windows remains in Notification mode. Cloning an activated disk neither guarantees activation of another virtual device nor grants licenses for the clones.

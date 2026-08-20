@@ -47,6 +47,9 @@ ${BOLD}QEMU & Disk Management (Bound to Registry):${RESET}
   ${BLUE}rename${RESET} <old> <new> [options]    Rename VM and move disk image
   ${BLUE}resize${RESET} <name> <size>            Resize VM disk via qemu-img and update registry
   ${BLUE}clone${RESET} <source> <new> [options]  Clone VM (linked overlay or full copy) and register
+  ${BLUE}seal-base${RESET} <vm> <base> [options] Capture a stopped, generalized VM as an immutable base
+  ${BLUE}create-from-base${RESET} <base> <name>  Create a thin writable VM overlay from a sealed base
+  ${BLUE}delete-base${RESET} <base>             Delete an unused sealed base and its metadata
   ${BLUE}delete${RESET} <name> [options]         Delete VM registry entry and remove disk file
   ${BLUE}snapshot${RESET} <name> <action> [...]    Manage internal disk snapshots (create, list, rollback, delete)
 
@@ -143,6 +146,7 @@ config_dir = sys.argv[1]
 registry_path = sys.argv[2]
 images_dir = sys.argv[3]
 run_dir = sys.argv[4]
+templates_dir = os.path.join(config_dir, "templates")
 action = sys.argv[5]
 args = sys.argv[6:]
 
@@ -731,6 +735,151 @@ elif action == "clone":
     data["vms"][new_name] = new_vm
     save_registry(data)
     print(f"[INFO] {clone_type} '{new_name}' created from '{src_name}' (SSH port: {new_ssh_port}).")
+    sys.exit(0)
+
+elif action == "seal-base":
+    parser = argparse.ArgumentParser(prog="manage-vms seal-base")
+    parser.add_argument("source_name")
+    parser.add_argument("base_name")
+    parser.add_argument("--license-json", required=True)
+    parser.add_argument("--allow-expiring-base", action="store_true")
+    parsed = parser.parse_args(args)
+    data = load_registry()
+    source_name = parsed.source_name.strip()
+    base_name = parsed.base_name.strip()
+    if source_name not in data["vms"]:
+        print(f"[ERROR] Source VM '{source_name}' not found in registry.", file=sys.stderr)
+        sys.exit(2)
+    source_vm = data["vms"][source_name]
+    if probe_vm_runtime(source_name, source_vm.get("disk"))["is_running"]:
+        print(f"[ERROR] VM '{source_name}' must be shut down after Sysprep before sealing.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        with open(parsed.license_json, "r", encoding="utf-8-sig") as handle:
+            licensing = json.load(handle)
+    except Exception as exc:
+        print(f"[ERROR] Could not read licensing metadata: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if licensing.get("evaluation") and not parsed.allow_expiring_base:
+        print("[ERROR] Refusing to seal Evaluation media without --allow-expiring-base.", file=sys.stderr)
+        sys.exit(1)
+    if licensing.get("evaluation") and not licensing.get("expires_at"):
+        print("[ERROR] Evaluation media has no measurable expiration date.", file=sys.stderr)
+        sys.exit(1)
+    os.makedirs(templates_dir, exist_ok=True)
+    base_disk = os.path.join(templates_dir, f"{base_name}.qcow2")
+    metadata_path = os.path.join(templates_dir, f"{base_name}.json")
+    if os.path.exists(base_disk) or os.path.exists(metadata_path):
+        print(f"[ERROR] Sealed base '{base_name}' already exists.", file=sys.stderr)
+        sys.exit(3)
+    subprocess.run(["qemu-img", "convert", "-O", "qcow2", source_vm["disk"], base_disk], check=True)
+    os.chmod(base_disk, 0o444)
+    source_vars = os.path.join(images_dir, f"{source_name}_vars.fd")
+    base_vars = os.path.join(templates_dir, f"{base_name}_vars.fd")
+    if os.path.exists(source_vars):
+        shutil.copy2(source_vars, base_vars)
+        os.chmod(base_vars, 0o444)
+    metadata = {
+        "schema_version": 1,
+        "name": base_name,
+        "sealed_at": get_utc_iso(),
+        "disk": base_disk,
+        "firmware_vars": base_vars if os.path.exists(base_vars) else None,
+        "source_vm": source_name,
+        "vm_spec": {key: source_vm.get(key) for key in ["os", "arch", "cpus", "memory", "accel", "extra_args"]},
+        "licensing": licensing,
+    }
+    with open(metadata_path, "w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2)
+        handle.write("\n")
+    print(f"[INFO] Sealed immutable base '{base_name}' at {base_disk}.")
+    sys.exit(0)
+
+elif action == "create-from-base":
+    parser = argparse.ArgumentParser(prog="manage-vms create-from-base")
+    parser.add_argument("base_name")
+    parser.add_argument("name")
+    parser.add_argument("--ssh-port", type=int, default=None)
+    parser.add_argument("--rdp-port", type=int, default=None)
+    parser.add_argument("--memory", default=None)
+    parser.add_argument("--cpus", type=int, default=None)
+    parser.add_argument("--description", default="")
+    parsed = parser.parse_args(args)
+    data = load_registry()
+    name = parsed.name.strip()
+    metadata_path = os.path.join(templates_dir, f"{parsed.base_name}.json")
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+    except Exception as exc:
+        print(f"[ERROR] Could not read sealed base '{parsed.base_name}': {exc}", file=sys.stderr)
+        sys.exit(2)
+    if name in data["vms"]:
+        print(f"[ERROR] VM '{name}' already exists in registry.", file=sys.stderr)
+        sys.exit(3)
+    licensing = metadata.get("licensing", {})
+    expires_at = licensing.get("expires_at")
+    if expires_at:
+        expiry = datetime.datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        if expiry <= datetime.datetime.now(datetime.timezone.utc):
+            print(f"[ERROR] Sealed base '{parsed.base_name}' expired at {expires_at}.", file=sys.stderr)
+            sys.exit(1)
+        if expiry - datetime.datetime.now(datetime.timezone.utc) < datetime.timedelta(days=14):
+            print(f"[WARN] Sealed base '{parsed.base_name}' expires at {expires_at}.", file=sys.stderr)
+    base_disk = metadata.get("disk")
+    if not base_disk or not os.path.exists(base_disk):
+        print(f"[ERROR] Sealed base disk is missing: {base_disk}", file=sys.stderr)
+        sys.exit(1)
+    target_disk = os.path.join(images_dir, f"{name}.qcow2")
+    subprocess.run(["qemu-img", "create", "-f", "qcow2", "-b", base_disk, "-F", "qcow2", target_disk], check=True)
+    base_vars = metadata.get("firmware_vars")
+    if base_vars and os.path.exists(base_vars):
+        clone_vars = os.path.join(images_dir, f"{name}_vars.fd")
+        shutil.copy2(base_vars, clone_vars)
+        os.chmod(clone_vars, 0o644)
+    spec = metadata.get("vm_spec", {})
+    used_ssh = {vm.get("ssh_port", 2222) for vm in data["vms"].values()}
+    ssh_port = parsed.ssh_port or 2222
+    while ssh_port in used_ssh:
+        ssh_port += 1
+    used_rdp = {vm.get("rdp_port", 3389) for vm in data["vms"].values()}
+    rdp_port = parsed.rdp_port or 3389
+    while rdp_port in used_rdp:
+        rdp_port += 1
+    data["vms"][name] = {
+        "name": name, "disk": target_disk, "os": spec.get("os", "windows"),
+        "arch": spec.get("arch", get_host_arch()), "cpus": parsed.cpus or spec.get("cpus", 2),
+        "memory": parsed.memory or spec.get("memory", "4G"), "accel": spec.get("accel", get_default_accel()),
+        "ssh_port": ssh_port, "rdp_port": rdp_port, "extra_args": spec.get("extra_args", ""),
+        "description": parsed.description or f"Thin clone of sealed base {parsed.base_name}",
+        "base_template": parsed.base_name, "created_at": get_utc_iso(), "updated_at": get_utc_iso()
+    }
+    save_registry(data)
+    print(f"[INFO] Created thin VM '{name}' from sealed base '{parsed.base_name}' (SSH port: {ssh_port}, RDP port: {rdp_port}).")
+    sys.exit(0)
+
+elif action == "delete-base":
+    parser = argparse.ArgumentParser(prog="manage-vms delete-base")
+    parser.add_argument("base_name")
+    parsed = parser.parse_args(args)
+    data = load_registry()
+    dependents = [name for name, vm in data["vms"].items() if vm.get("base_template") == parsed.base_name]
+    if dependents:
+        print(f"[ERROR] Sealed base '{parsed.base_name}' is still used by: {', '.join(sorted(dependents))}", file=sys.stderr)
+        sys.exit(1)
+    metadata_path = os.path.join(templates_dir, f"{parsed.base_name}.json")
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+    except Exception as exc:
+        print(f"[ERROR] Could not read sealed base '{parsed.base_name}': {exc}", file=sys.stderr)
+        sys.exit(2)
+    targets = [metadata.get("disk"), metadata.get("firmware_vars"), metadata_path]
+    for target in targets:
+        if target and os.path.exists(target):
+            os.chmod(target, 0o644)
+            os.remove(target)
+    print(f"[INFO] Deleted sealed base '{parsed.base_name}'.")
     sys.exit(0)
 
 elif action == "delete":
@@ -1750,6 +1899,15 @@ case "$COMMAND" in
     ;;
   clone|cp)
     run_py_gateway "clone" "$@"
+    ;;
+  seal-base)
+    run_py_gateway "seal-base" "$@"
+    ;;
+  create-from-base)
+    run_py_gateway "create-from-base" "$@"
+    ;;
+  delete-base)
+    run_py_gateway "delete-base" "$@"
     ;;
   delete|rm|destroy|remove|unregister)
     run_py_gateway "delete" "$@"

@@ -141,6 +141,26 @@ This single command executes the complete unattended pipeline:
    - Port forwarding: Host `2222` -> Guest `22` (SSH), Host `3389` -> Guest `3389` (RDP).
 5. Recovers a missed optical-boot prompt through the managed QMP console when needed, waits for a real SSH banner, and verifies `C:\ProgramData\vm-stack\provisioned` before reporting success. Use `--no-wait` only when the caller explicitly wants asynchronous creation.
 
+#### 4. Reusing a Sealed Windows Base
+
+After one fully provisioned Windows VM has passed acceptance, generalize and capture it once:
+
+```bash
+./skills/create-vm/scripts/seal-windows-base.sh <source-vm> windows11-arm64-base \
+  --user admin --password admin
+```
+
+The seal workflow records the edition, licensing channel/status, grace time, and expiration. Evaluation media is rejected unless `--allow-expiring-base` is explicit. It removes machine-specific SSH keys and readiness state, runs Sysprep, waits for Windows to shut down, and delegates immutable image capture to `manage-vms.sh seal-base`.
+
+Create subsequent VMs as thin overlays:
+
+```bash
+./skills/create-vm/scripts/create-windows-from-base.sh windows11-arm64-base <new-vm> \
+  --user admin --password admin
+```
+
+The clone receives private writable disk and firmware state. Windows specializes a fresh machine identity, generates new SSH host keys, writes the readiness marker, and exposes SSH. The host then retries activation after networking is usable, persists the output in `C:\ProgramData\vm-stack\activation.log`, and reports the resulting state. Activation failure does not make an otherwise functional test VM unready, but it must remain visible to the caller. An inherited activation state is neither guaranteed to activate another virtual device nor authorization to run more Windows instances; licensing remains the operator's responsibility.
+
 ---
 
 ### B. Linux VM Provisioning (Ubuntu / Debian / Cloud-Init)
@@ -186,5 +206,8 @@ When human assistance is needed (such as downloading a Windows ISO from Microsof
 | **[scripts/fetch-media.sh](scripts/fetch-media.sh)** | Downloads and manages ISOs, VirtIO drivers, pinned Win32-OpenSSH installers, and cloud images in `~/.config/vm-stack/media/`. |
 | **[scripts/generate-unattend.sh](scripts/generate-unattend.sh)** | Generates the Windows answer file and packages it with the offline guest provisioner and OpenSSH MSI. |
 | **[scripts/provision-windows.ps1](scripts/provision-windows.ps1)** | Sole guest-provisioning authority for VirtIO networking, OpenSSH, firewall/default shell configuration, and the readiness marker. |
+| **[scripts/prepare-windows-base.ps1](scripts/prepare-windows-base.ps1)** | Records licensing state, removes clone-unsafe identity, defines SYSTEM specialization, and invokes Sysprep. |
+| **[scripts/seal-windows-base.sh](scripts/seal-windows-base.sh)** | Orchestrates validation, generalization, shutdown, and immutable base capture through the manager. |
+| **[scripts/create-windows-from-base.sh](scripts/create-windows-from-base.sh)** | Creates, boots, verifies, and activation-checks a thin Windows clone. |
 | **[scripts/create-windows-vm.sh](scripts/create-windows-vm.sh)** | End-to-end automated runner for Windows 11/10 unattended QEMU provisioning. |
 | **[scripts/create-vm-wizard.sh](scripts/create-vm-wizard.sh)** | Interactive multi-stage terminal setup wizard for human-guided media and VM creation. |
