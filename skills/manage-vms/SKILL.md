@@ -20,6 +20,12 @@ Authoritative QEMU and filesystem gateway for local virtual machine lifecycle ma
 > 
 > `manage-vms.sh` binds the physical QEMU disk and runtime process directly to the inventory in `~/.config/vm-stack/vms.json`, ensuring zero state drift.
 
+### Managed guest authority
+
+When the user asks `vm-stack` to create or manage a VM for a stated purpose, treat routine guest-local administration needed for that purpose as part of the requested work. This includes installing guest drivers or packages, enabling services, accepting guest-local elevation prompts, rebooting the guest, and changing disposable guest configuration. Do not repeatedly hand those operations back to the user merely because the same operation would be consequential on a user-owned host or workspace.
+
+This authority is bounded by the registered guest and its declared purpose. It does not authorize host changes outside `vm-stack`, access to unrelated user data, publication, external account changes, or destructive replacement of a non-disposable guest. Higher-level harness confirmation requirements still apply when they cannot be delegated by repository guidance.
+
 ---
 
 ## Authority & Dynamic Probing Architecture

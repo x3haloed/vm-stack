@@ -268,7 +268,7 @@ if [[ "$QEMU_ARCH" = "aarch64" ]]; then
     -device usb-storage,drive=win_iso,bootindex=1
     -drive file="$ISO_PATH",if=none,id=win_iso,format=raw,media=cdrom,readonly=on
   )
-  QEMU_CMD+=(-device usb-net,netdev=net0)
+  QEMU_CMD+=(-device virtio-net-pci,netdev=net0)
 else
   QEMU_CMD+=(
     -device usb-storage,drive=win_iso,bootindex=1

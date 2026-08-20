@@ -826,7 +826,7 @@ elif action == "start":
     accel = vm.get("accel", get_default_accel())
     ssh_p = parsed.ssh_port or vm.get("ssh_port", 2222)
     rdp_p = parsed.rdp_port or vm.get("rdp_port", 3389)
-    network_device = "usb-net" if arch == "aarch64" and vm.get("os", "").lower() == "windows" else "virtio-net-pci"
+    network_device = "virtio-net-pci"
 
     # Assemble base command
     qmp_path = get_qmp_socket_path(name)
@@ -936,7 +936,7 @@ elif action == "start":
 elif action == "send-key":
     parser = argparse.ArgumentParser(prog="manage-vms send-key")
     parser.add_argument("name")
-    parser.add_argument("key", help="QEMU key name, for example spc, ret, or esc")
+    parser.add_argument("key", nargs="+", help="One or more simultaneous QEMU key names")
     parsed = parser.parse_args(args)
 
     data = load_registry()
@@ -945,8 +945,8 @@ elif action == "send-key":
         print(f"[ERROR] VM '{name}' not found in registry.", file=sys.stderr)
         sys.exit(2)
     try:
-        qmp_execute(name, "send-key", {"keys": [{"type": "qcode", "data": parsed.key}]})
-        print(f"[INFO] Sent key '{parsed.key}' to VM '{name}'.")
+        qmp_execute(name, "send-key", {"keys": [{"type": "qcode", "data": key} for key in parsed.key]})
+        print(f"[INFO] Sent key combination '{'+'.join(parsed.key)}' to VM '{name}'.")
         sys.exit(0)
     except Exception as e:
         print(f"[ERROR] Could not send key to VM '{name}': {e}", file=sys.stderr)
@@ -966,10 +966,12 @@ elif action == "type-text":
         sys.exit(2)
 
     punctuation = {
-        "\\": ["backslash"], ".": ["dot"], "-": ["minus"],
-        ":": ["shift", "semicolon"], "/": ["slash"], " ": ["spc"]
+        "\\": ["backslash"], ".": ["dot"], "-": ["minus"], "_": ["shift", "minus"],
+        ":": ["shift", "semicolon"], ";": ["semicolon"], "|": ["shift", "backslash"],
+        "~": ["shift", "grave_accent"], "/": ["slash"], " ": ["spc"]
     }
     try:
+        key_sequences = []
         for char in parsed.text:
             if char.isalpha():
                 keys = ["shift", char.lower()] if char.isupper() else [char]
@@ -979,6 +981,8 @@ elif action == "type-text":
                 keys = punctuation[char]
             else:
                 raise RuntimeError(f"Unsupported character for QMP typing: {char!r}")
+            key_sequences.append(keys)
+        for keys in key_sequences:
             qmp_execute(name, "send-key", {"keys": [{"type": "qcode", "data": key} for key in keys]})
             time.sleep(0.02)
         if parsed.enter:
@@ -1478,6 +1482,8 @@ elif action in ["exec", "ssh"]:
 
     if parsed.key:
         ssh_base.extend(["-i", os.path.abspath(parsed.key)])
+    elif password:
+        ssh_base.extend(["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no"])
 
     target_dest = f"{user}@127.0.0.1"
 
@@ -1490,15 +1496,17 @@ elif action in ["exec", "ssh"]:
             return subprocess.run(full).returncode
         try:
             import pty, select
-            master, slave = pty.openpty()
-            proc = subprocess.Popen(cmd_list, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
-            os.close(slave)
+            child_pid, master = pty.fork()
+            if child_pid == 0:
+                os.execvp(cmd_list[0], cmd_list)
             buf = b""
             password_sent = False
             start_time = time.time()
-            while proc.poll() is None:
+            child_status = None
+            while child_status is None:
                 if time.time() - start_time > timeout_sec:
-                    proc.kill()
+                    os.kill(child_pid, signal.SIGKILL)
+                    os.waitpid(child_pid, 0)
                     os.close(master)
                     return 124
                 r, _, _ = select.select([master], [], [], 0.1)
@@ -1509,7 +1517,7 @@ elif action in ["exec", "ssh"]:
                             break
                         buf += data
                         if not password_sent and (b"password:" in buf.lower() or b"password for" in buf.lower()):
-                            os.write(master, (pwd + "\n").encode("utf-8"))
+                            os.write(master, (pwd + "\r").encode("utf-8"))
                             password_sent = True
                             buf = b""
                         else:
@@ -1517,8 +1525,13 @@ elif action in ["exec", "ssh"]:
                             sys.stdout.buffer.flush()
                     except OSError:
                         break
+                waited_pid, status = os.waitpid(child_pid, os.WNOHANG)
+                if waited_pid == child_pid:
+                    child_status = status
             os.close(master)
-            return proc.wait()
+            if child_status is None:
+                _, child_status = os.waitpid(child_pid, 0)
+            return os.waitstatus_to_exitcode(child_status)
         except Exception:
             return subprocess.run(cmd_list).returncode
 
@@ -1563,6 +1576,8 @@ elif action in ["copy-to", "copy-from"]:
 
     if parsed.key:
         scp_base.extend(["-i", os.path.abspath(parsed.key)])
+    elif password:
+        scp_base.extend(["-o", "PreferredAuthentications=password", "-o", "PubkeyAuthentication=no"])
 
     if action == "copy-to":
         src_path = os.path.abspath(parsed.src)
@@ -1582,15 +1597,17 @@ elif action in ["copy-to", "copy-from"]:
             return subprocess.run(full).returncode
         try:
             import pty, select
-            master, slave = pty.openpty()
-            proc = subprocess.Popen(cmd_list, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
-            os.close(slave)
+            child_pid, master = pty.fork()
+            if child_pid == 0:
+                os.execvp(cmd_list[0], cmd_list)
             buf = b""
             password_sent = False
             start_time = time.time()
-            while proc.poll() is None:
+            child_status = None
+            while child_status is None:
                 if time.time() - start_time > timeout_sec:
-                    proc.kill()
+                    os.kill(child_pid, signal.SIGKILL)
+                    os.waitpid(child_pid, 0)
                     os.close(master)
                     return 124
                 r, _, _ = select.select([master], [], [], 0.1)
@@ -1601,7 +1618,7 @@ elif action in ["copy-to", "copy-from"]:
                             break
                         buf += data
                         if not password_sent and (b"password:" in buf.lower() or b"password for" in buf.lower()):
-                            os.write(master, (pwd + "\n").encode("utf-8"))
+                            os.write(master, (pwd + "\r").encode("utf-8"))
                             password_sent = True
                             buf = b""
                         else:
@@ -1609,8 +1626,13 @@ elif action in ["copy-to", "copy-from"]:
                             sys.stdout.buffer.flush()
                     except OSError:
                         break
+                waited_pid, status = os.waitpid(child_pid, os.WNOHANG)
+                if waited_pid == child_pid:
+                    child_status = status
             os.close(master)
-            return proc.wait()
+            if child_status is None:
+                _, child_status = os.waitpid(child_pid, 0)
+            return os.waitstatus_to_exitcode(child_status)
         except Exception:
             return subprocess.run(cmd_list).returncode
 
