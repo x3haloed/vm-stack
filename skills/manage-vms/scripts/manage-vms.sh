@@ -58,6 +58,9 @@ ${BOLD}VM Lifecycle & Execution:${RESET}
   ${BLUE}exec${RESET} <name> [options] -- <cmd>   Execute command inside guest via SSH
   ${BLUE}copy-to${RESET} <name> <src> <dest>      Copy local file/directory into guest via SCP
   ${BLUE}copy-from${RESET} <name> <src> <dest>    Copy file/directory from guest to host via SCP
+  ${BLUE}send-key${RESET} <name> <key...>          Send a key or key combination through the QEMU monitor
+  ${BLUE}type-text${RESET} <name> <text>           Type supported text through the QEMU monitor
+  ${BLUE}screenshot${RESET} <name> --output <ppm>  Capture the guest framebuffer through the QEMU monitor
   ${BLUE}run-ephemeral${RESET} <base> -- <cmd>   Start disposable VM with snapshot discard, run command, and stop
 
 ${BOLD}Inventory Query & Inspection:${RESET}

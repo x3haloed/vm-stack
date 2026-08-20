@@ -110,7 +110,19 @@ Copies files between host and guest via SCP:
 ./skills/manage-vms/scripts/manage-vms.sh status dev-ubuntu --json
 ```
 
-### 8. Stop a Virtual Machine (`stop`)
+### 8. Operate a Pre-SSH Console (`send-key` / `type-text` / `screenshot`)
+
+Use the manager-owned QEMU monitor when a guest is still in firmware, installation, OOBE, or recovery and SSH is unavailable:
+
+```bash
+./skills/manage-vms/scripts/manage-vms.sh screenshot win11-dev --output /tmp/win11.ppm
+./skills/manage-vms/scripts/manage-vms.sh send-key win11-dev ctrl shift ret
+./skills/manage-vms/scripts/manage-vms.sh type-text win11-dev 'FS0:\EFI\BOOT\BOOTAA64.EFI' --enter
+```
+
+`type-text` validates the complete string before sending any keys. Prefer `exec` once the guest SSH service is ready.
+
+### 9. Stop a Virtual Machine (`stop`)
 ```bash
 # Graceful ACPI shutdown
 ./skills/manage-vms/scripts/manage-vms.sh stop dev-ubuntu
@@ -119,7 +131,7 @@ Copies files between host and guest via SCP:
 ./skills/manage-vms/scripts/manage-vms.sh stop dev-ubuntu --force
 ```
 
-### 9. Snapshot Management (`snapshot`)
+### 10. Snapshot Management (`snapshot`)
 ```bash
 # Create checkpoint
 ./skills/manage-vms/scripts/manage-vms.sh snapshot dev-ubuntu create clean-install
