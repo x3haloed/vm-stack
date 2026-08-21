@@ -107,6 +107,20 @@
             "type": "string",
             "description": "Human-readable description of VM workload or role"
           },
+          "retention": {
+            "type": "string",
+            "enum": ["disposable", "retained"]
+          },
+          "purpose": {
+            "type": ["string", "null"]
+          },
+          "release_when": {
+            "type": ["string", "null"]
+          },
+          "auxiliary_files": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",

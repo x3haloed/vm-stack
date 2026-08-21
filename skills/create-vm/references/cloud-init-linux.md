@@ -1,6 +1,6 @@
 # Linux Cloud-Init Instant VM Provisioning Reference
 
-This reference covers instant Linux virtual machine instantiation using pre-baked cloud images (Ubuntu, Debian, Alpine) with Copy-on-Write linked overlays.
+This reference covers Linux virtual machine instantiation using Ubuntu and Debian cloud images, cloud-init, and copy-on-write linked overlays. Alpine media is not yet implemented by the bundled fetcher or creator.
 
 ## 1. Cloud Image Sources
 
@@ -8,25 +8,19 @@ This reference covers instant Linux virtual machine instantiation using pre-bake
 | :--- | :--- | :--- | :--- |
 | **Ubuntu 24.04 (Noble)** | Raw / QCow2 image | `.img` | `ubuntu` |
 | **Debian 12 (Bookworm)** | Generic cloud QCow2 | `.qcow2` | `debian` / `root` |
-| **Alpine Linux** | Virtual QCow2 | `.qcow2` | `alpine` / `root` |
 
 ## 2. Instant Provisioning Workflow
 
-Instead of running an interactive Linux distribution installer, `fetch-media.sh` downloads the upstream cloud image once into `~/.config/vm-stack/media/`.
+Instead of running an interactive installer, `create-linux-vm.sh` downloads the upstream image once, generates per-VM NoCloud seed media and SSH identity, and registers a disposable thin overlay.
 
 When `manage-vms.sh create` is called with `--backing-file`:
 ```bash
-# 1. Download base image once
-./skills/create-vm/scripts/fetch-media.sh ubuntu
-
-# 2. Create lightweight copy-on-write overlay in seconds
-./skills/manage-vms/scripts/manage-vms.sh create my-ubuntu \
-  --size 20G \
-  --backing-file ~/.config/vm-stack/media/ubuntu-24.04-server-cloudimg-aarch64.img \
-  --os ubuntu \
-  --arch aarch64
+./skills/create-vm/scripts/create-linux-vm.sh my-ubuntu \
+  --os ubuntu --size 20G --memory 2G --cpus 2 \
+  --purpose "Run the Linux smoke suite" \
+  --release-when "Logs and exit status are saved outside the guest"
 ```
 
-- **Creation Time:** < 1 second.
-- **Disk Usage:** < 100 KB initial delta disk.
-- **Boot Time:** ~5-10 seconds to full SSH login prompt.
+- The upstream cloud image is reusable cached media, not a customized template.
+- The writable overlay, seed media, and generated SSH key are VM-owned and removed by `manage-vms.sh release`.
+- Actual boot and provisioning time depends on host, image, networking, and requested packages; readiness is proven by SSH rather than a fixed delay.

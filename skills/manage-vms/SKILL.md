@@ -71,8 +71,12 @@ Sealed-base clones require `--purpose` and `--release-when` and default to `disp
   --os ubuntu \
   --accel hvf \
   --ssh-port 2222 \
-  --description "Primary ARM64 development environment"
+  --description "Run the Linux compatibility suite" \
+  --purpose "Run the Linux compatibility suite" \
+  --release-when "Results and environment metadata are copied out"
 ```
+
+When `--purpose` and `--release-when` are supplied, `create` defaults to disposable; add `--retained` only for an explicitly justified long-lived VM. `--auxiliary-file` may be repeated for VM-owned seed media or keys that `release` should remove with the disk.
 
 ### 2. Start a Virtual Machine (`start`)
 ```bash

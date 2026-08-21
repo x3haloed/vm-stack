@@ -92,6 +92,10 @@ ${BOLD}Options for 'create':${RESET}
   --rdp-port <port>          Default host port for RDP forwarding [default: 3389]
   --description <text>       Human-readable description
   --extra-args <args>        Extra arguments for QEMU execution
+  --purpose <text>           Why this VM exists (enables purpose-bound retention)
+  --release-when <condition> Observable condition after which it can be released
+  --retained                 Keep a purpose-bound VM after completion (default: disposable)
+  --auxiliary-file <path>    VM-owned file removed with its disk (repeatable)
 
 ${BOLD}Options for 'start':${RESET}
   -d, --daemon, --background Run VM in background process (PID tracked in run/<name>.pid)
@@ -458,6 +462,10 @@ elif action == "create":
     parser.add_argument("--rdp-port", type=int, default=3389)
     parser.add_argument("--description", default="")
     parser.add_argument("--extra-args", default="")
+    parser.add_argument("--purpose", default="")
+    parser.add_argument("--release-when", default="")
+    parser.add_argument("--retained", action="store_true")
+    parser.add_argument("--auxiliary-file", action="append", default=[])
 
     parsed = parser.parse_args(args)
     data = load_registry()
@@ -470,6 +478,19 @@ elif action == "create":
     if name in data["vms"]:
         print(f"[ERROR] VM '{name}' already exists in registry.", file=sys.stderr)
         sys.exit(3)
+
+    if bool(parsed.purpose) != bool(parsed.release_when):
+        print("[ERROR] --purpose and --release-when must be supplied together.", file=sys.stderr)
+        sys.exit(1)
+
+    auxiliary_files = []
+    config_root = os.path.abspath(config_dir)
+    for path in parsed.auxiliary_file:
+        auxiliary_path = os.path.abspath(path)
+        if os.path.commonpath([config_root, auxiliary_path]) != config_root:
+            print(f"[ERROR] Auxiliary files must be inside vm-stack config: {auxiliary_path}", file=sys.stderr)
+            sys.exit(1)
+        auxiliary_files.append(auxiliary_path)
 
     disk_path = parsed.disk
     if not disk_path:
@@ -512,6 +533,10 @@ elif action == "create":
         "rdp_port": parsed.rdp_port,
         "extra_args": parsed.extra_args,
         "description": parsed.description,
+        "retention": "retained" if parsed.retained or not parsed.purpose else "disposable",
+        "purpose": parsed.purpose or None,
+        "release_when": parsed.release_when or None,
+        "auxiliary_files": auxiliary_files,
         "created_at": get_utc_iso(),
         "updated_at": get_utc_iso()
     }
@@ -986,6 +1011,15 @@ elif action in ["delete", "release"]:
             os.remove(disk_path)
         except Exception as e:
             print(f"[WARN] Could not remove disk file: {e}", file=sys.stderr)
+
+    if not parsed.keep_disk:
+        for auxiliary_path in vm.get("auxiliary_files", []):
+            if auxiliary_path and os.path.isfile(auxiliary_path):
+                try:
+                    print(f"[INFO] Removing auxiliary file: {auxiliary_path}")
+                    os.remove(auxiliary_path)
+                except Exception as e:
+                    print(f"[WARN] Could not remove auxiliary file: {e}", file=sys.stderr)
 
     # Clean up associated vars and pid files
     vars_file = os.path.join(images_dir, f"{name}_vars.fd")

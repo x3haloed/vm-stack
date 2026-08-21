@@ -1,0 +1,23 @@
+{
+  "skill_name": "use-linux-vm",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Please test this project on Linux.",
+      "expected_output": "The agent inspects project support evidence, defaults to one host-native Ubuntu LTS server only if none exists, right-sizes the guest, declares purpose and release condition, captures results, and releases the disposable VM without creating a customized template.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Our support table lists Ubuntu 24.04 and Debian 12. Run the compatibility suite on Linux.",
+      "expected_output": "The agent tests both explicitly supported distributions, uses project or workload evidence for resources, keeps upstream media separate from customized templates, and releases each purpose-bound guest after evidence is copied out.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Can you reproduce this browser rendering bug on Linux? The project does not say whether CI runs headlessly.",
+      "expected_output": "The agent recognizes that graphical versus headless execution could materially change the result and asks the user instead of silently choosing, while resolving distribution and resource facts from project evidence where possible.",
+      "files": []
+    }
+  ]
+}

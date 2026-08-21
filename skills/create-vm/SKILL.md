@@ -9,6 +9,7 @@ Authoritative procedural guide and tooling for creating, provisioning, and autom
 
 - Windows Unattended Guide: [references/windows-provisioning.md](references/windows-provisioning.md)
 - Linux Cloud-Init Guide: [references/cloud-init-linux.md](references/cloud-init-linux.md)
+- Implicit Linux test workflow: [../use-linux-vm/SKILL.md](../use-linux-vm/SKILL.md)
 - Desktop Wizard Helper: [scripts/launch-terminal.sh](scripts/launch-terminal.sh)
 
 Covers automated media acquisition, unattended installation (`autounattend.xml` / `cloud-init`), UEFI NVRAM firmware handling, TPM/SecureBoot bypasses, deterministic offline guest provisioning, and interactive desktop wizard fallbacks when media acquisition genuinely needs human intervention.
@@ -169,25 +170,13 @@ The clone receives private writable disk and firmware state. Windows specializes
 
 ### B. Linux VM Provisioning (Ubuntu / Debian / Cloud-Init)
 
-For Linux virtual machines, pre-baked cloud images with `cloud-init` provide near-instant 10-second provisioning without running an installer:
+For Linux virtual machines, use `create-linux-vm.sh`. It creates a cloud-init identity and SSH key, a thin overlay over cached upstream media, and a purpose-bound registry entry. Read `use-linux-vm` first when Linux is implied by a test/build request because it owns flavor, GUI, sizing, and retention judgment.
 
-#### 1. Download Base Cloud Image
 ```bash
-# Ubuntu 24.04 Server Cloud Image
-./skills/create-vm/scripts/fetch-media.sh ubuntu
-
-# Debian 12 Generic Cloud Image
-./skills/create-vm/scripts/fetch-media.sh debian
-```
-
-#### 2. Create VM via `manage-vms.sh`
-```bash
-./skills/manage-vms/scripts/manage-vms.sh create my-ubuntu \
-  --size 20G \
-  --memory 4G \
-  --cpus 2 \
-  --os ubuntu \
-  --backing-file ~/.config/vm-stack/media/ubuntu-24.04-server-cloudimg-aarch64.img
+./skills/create-vm/scripts/create-linux-vm.sh my-ubuntu \
+  --os ubuntu --size 20G --memory 2G --cpus 2 \
+  --purpose "Run Linux compatibility tests" \
+  --release-when "Results and environment metadata are copied out"
 ```
 
 ---
@@ -214,4 +203,5 @@ When human assistance is needed (such as downloading a Windows ISO from Microsof
 | **[scripts/seal-windows-base.sh](scripts/seal-windows-base.sh)** | Orchestrates validation, generalization, shutdown, and immutable base capture through the manager. |
 | **[scripts/create-windows-from-base.sh](scripts/create-windows-from-base.sh)** | Creates, boots, verifies, and activation-checks a thin Windows clone. |
 | **[scripts/create-windows-vm.sh](scripts/create-windows-vm.sh)** | End-to-end automated runner for Windows 11/10 unattended QEMU provisioning. |
+| **[scripts/create-linux-vm.sh](scripts/create-linux-vm.sh)** | Noninteractive Ubuntu/Debian cloud-image provisioning with cloud-init, SSH, and purpose-bound cleanup. |
 | **[scripts/create-vm-wizard.sh](scripts/create-vm-wizard.sh)** | Interactive multi-stage terminal setup wizard for human-guided media and VM creation. |

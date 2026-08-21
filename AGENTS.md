@@ -69,4 +69,5 @@ For running tests, builds, or executing untrusted code in an isolated guest envi
 | :--- | :--- | :--- |
 | **`sanity-check`** | Verify QEMU, hypervisor acceleration (`hvf`/`kvm`), and preferences. | `./skills/sanity-check/scripts/sanity-check.sh --check --json` |
 | **`create-vm`** | Download media, generate unattended answer files, and provision VMs. | `./skills/create-vm/scripts/create-windows-vm.sh <name>` |
+| **`use-linux-vm`** | Infer and run purpose-bound Linux test/build guests, including implicit Linux requests. | `./skills/create-vm/scripts/create-linux-vm.sh <name> ...` |
 | **`manage-vms`** | Complete lifecycle, exec, file transfer, and snapshot management. | `./skills/manage-vms/scripts/manage-vms.sh list --json` |
