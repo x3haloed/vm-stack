@@ -453,8 +453,27 @@ if [[ "$WAIT_FOR_READY" -eq 1 ]]; then
     log_error "Windows provisioning did not become ready. Guest framebuffer: $DIAGNOSTIC_FRAME"
     exit 1
   fi
-  "$MANAGE_VMS_SCRIPT" exec "$VM_NAME" --user "$USERNAME" --password "$PASSWORD" -- \
-    "if ((Get-Content -LiteralPath C:\\ProgramData\\vm-stack\\provisioned -ErrorAction SilentlyContinue) -ne 'ok') { exit 1 }"
+
+  # Do not assume the OpenSSH DefaultShell registry change has taken effect for
+  # the first connection. Execute a cmd-native read explicitly and retry: the
+  # SSH service can briefly restart or become banner-unresponsive while Windows
+  # finishes its first-login work, especially under TCG emulation.
+  PROVISION_VERIFY_TIMEOUT=300
+  PROVISION_VERIFY_STARTED="$(date +%s)"
+  PROVISION_STATUS=""
+  while (( $(date +%s) - PROVISION_VERIFY_STARTED < PROVISION_VERIFY_TIMEOUT )); do
+    if PROVISION_STATUS="$("$MANAGE_VMS_SCRIPT" exec "$VM_NAME" \
+      --user "$USERNAME" --password "$PASSWORD" --timeout 30 -- \
+      'cmd.exe /d /s /c type C:\ProgramData\vm-stack\provisioned' 2>/dev/null)"; then
+      PROVISION_STATUS="$(printf '%s' "$PROVISION_STATUS" | tr -d '\r\n ')"
+      [[ "$PROVISION_STATUS" = "ok" ]] && break
+    fi
+    sleep 5
+  done
+  if [[ "$PROVISION_STATUS" != "ok" ]]; then
+    log_error "Windows SSH became reachable, but the provisioning marker was not verified within $PROVISION_VERIFY_TIMEOUT seconds."
+    exit 1
+  fi
   log_info "Windows VM '$VM_NAME' is provisioned and ready for managed execution."
 else
   log_info "Windows installation session started for '$VM_NAME'."
