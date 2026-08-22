@@ -173,55 +173,33 @@ banner "vm-stack VM Creation Wizard"
 stage "Select OS & Architecture"
 say "Host architecture detected: $HOST_ARCH ($TARGET_ARCH)"
 say "Select target operating system:"
-printf '\n    1) Windows 11 (%s)\n' "$TARGET_ARCH"
-printf '    2) Ubuntu 24.04 Server (%s)\n' "$TARGET_ARCH"
-printf '    3) Debian 12 (%s)\n' "$TARGET_ARCH"
-printf '    4) Custom ISO / Disk Image\n\n'
-
-ask OS_SELECTION "Enter selection (1-4)" "1"
-
-case "$OS_SELECTION" in
-  1)
-    OS_CHOICE="windows"
-    VM_NAME="win11-dev"
-    VM_RAM="8G"
-    VM_CPUS="4"
-    VM_SIZE="64G"
-    ;;
-  2)
-    OS_CHOICE="ubuntu"
-    VM_NAME="ubuntu-24-dev"
-    VM_RAM="4G"
-    VM_CPUS="2"
-    VM_SIZE="20G"
-    ;;
-  3)
-    OS_CHOICE="debian"
-    VM_NAME="debian-12-dev"
-    VM_RAM="4G"
-    VM_CPUS="2"
-    VM_SIZE="20G"
-    ;;
-  *)
-    OS_CHOICE="custom"
-    VM_NAME="custom-vm"
-    VM_RAM="4G"
-    VM_CPUS="2"
-    VM_SIZE="30G"
-    ;;
-esac
-
-if [[ "$OS_CHOICE" = "windows" && ( "$HOST_ARCH" = "arm64" || "$HOST_ARCH" = "aarch64" ) ]]; then
-  say "Choose how Windows should execute on Apple Silicon:"
-  printf '\n    1) Windows 11 ARM64 with HVF (fast)\n'
-  printf '    2) Windows 11 x86-64 with TCG (slow compatibility mode)\n\n'
-  ask WINDOWS_EXECUTION "Enter selection (1-2)" "1"
-  if [[ "$WINDOWS_EXECUTION" = "2" ]]; then
-    TARGET_ARCH="x86_64"
-    WINDOWS_ACCEL="tcg"
-    VM_NAME="win11-x64-tcg"
-    warn "x86-64 TCG installation may take several hours."
-  fi
+if [[ "$HOST_ARCH" = "arm64" || "$HOST_ARCH" = "aarch64" ]]; then
+  printf '\n    1) Windows 11 ARM64 — HVF virtualization (fast)\n'
+  printf '    2) Windows 11 x86-64 — TCG emulation (slow compatibility mode)\n'
+  printf '    3) Ubuntu 24.04 Server (aarch64)\n'
+  printf '    4) Debian 12 (aarch64)\n'
+  printf '    5) Custom ISO / Disk Image\n\n'
+  ask OS_SELECTION "Enter selection (1-5)" "1"
+  case "$OS_SELECTION" in
+    1) OS_CHOICE="windows"; TARGET_ARCH="aarch64"; WINDOWS_ACCEL="hvf"; VM_NAME="win11-dev" ;;
+    2) OS_CHOICE="windows"; TARGET_ARCH="x86_64"; WINDOWS_ACCEL="tcg"; VM_NAME="win11-x64-tcg";
+       warn "x86-64 TCG installation may take several hours." ;;
+    3) OS_CHOICE="ubuntu"; VM_NAME="ubuntu-24-dev"; VM_RAM="4G"; VM_CPUS="2"; VM_SIZE="20G" ;;
+    4) OS_CHOICE="debian"; VM_NAME="debian-12-dev"; VM_RAM="4G"; VM_CPUS="2"; VM_SIZE="20G" ;;
+    *) OS_CHOICE="custom"; VM_NAME="custom-vm"; VM_RAM="4G"; VM_CPUS="2"; VM_SIZE="30G" ;;
+  esac
+else
+  printf '\n    1) Windows 11 (x86_64)\n'
+  printf '    2) Ubuntu 24.04 Server (x86_64)\n'
+  printf '    3) Debian 12 (x86_64)\n'
+  printf '    4) Custom ISO / Disk Image\n\n'
+  ask OS_SELECTION "Enter selection (1-4)" "1"
+  case "$OS_SELECTION" in
+    1) OS_CHOICE="windows"; VM_NAME="win11-dev" ;;
+    2) OS_CHOICE="ubuntu"; VM_NAME="ubuntu-24-dev"; VM_RAM="4G"; VM_CPUS="2"; VM_SIZE="20G" ;;
+    3) OS_CHOICE="debian"; VM_NAME="debian-12-dev"; VM_RAM="4G"; VM_CPUS="2"; VM_SIZE="20G" ;;
+    *) OS_CHOICE="custom"; VM_NAME="custom-vm"; VM_RAM="4G"; VM_CPUS="2"; VM_SIZE="30G" ;;
+  esac
 fi
 
 success "Selected: $OS_CHOICE ($TARGET_ARCH)"

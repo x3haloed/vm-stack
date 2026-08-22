@@ -1,6 +1,6 @@
 {
   "name": "vm-stack",
-  "version": "0.1.0+codex.20260822142309",
+  "version": "0.1.0+codex.20260822142513",
   "description": "Provision, manage, and run commands in local virtual machines.",
   "author": {
     "name": "Chad Kirby",
