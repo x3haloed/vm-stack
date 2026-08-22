@@ -97,7 +97,13 @@ When a user asks to create or start a VM (e.g. *"I want you to start a Windows V
 ### A. Windows 11 / Windows 10 Provisioning
 
 #### 1. Architecture Matching
-- **Apple Silicon (`arm64`)**: Must install **Windows 11 on ARM (ARM64)** with `-accel hvf` and `qemu-system-aarch64`. *(Emulating x86_64 Windows on Apple Silicon via TCG is slow and unsupported for interactive workloads).*
+- **Apple Silicon (`arm64`)**, ordinary path: install **Windows 11 on ARM
+  (ARM64)** with `-accel hvf` and `qemu-system-aarch64`.
+- **Apple Silicon (`arm64`)**, explicit compatibility path: x86-64 Windows may
+  be installed with `--arch x86_64 --accel tcg`. This is full-system CPU
+  emulation, not HVF virtualization. It is intentionally opt-in, warns that
+  installation may take several hours, and defaults readiness waiting to four
+  hours. Use it when native x86-64 execution semantics matter more than speed.
 - **Intel Mac (`x86_64`)**: Install **Windows 10/11 x86_64** with `-accel hvf` and `qemu-system-x86_64`.
 
 #### 2. Media Acquisition (`~/.config/vm-stack/media/`)
@@ -129,12 +135,22 @@ Run the automated Windows creator script:
   --rdp-port 3389
 ```
 
+On Apple Silicon, explicitly request x86-64 TCG emulation with matching x64
+installation media:
+
+```bash
+./skills/create-vm/scripts/create-windows-vm.sh windows-x64-tcg \
+  --arch x86_64 --accel tcg --iso /path/to/Win11_x64.iso \
+  --size 64G --memory 8G --cpus 4
+```
+
 This single command executes the complete unattended pipeline:
 1. Allocates and registers the VM in `~/.config/vm-stack/vms.json` via `manage-vms.sh`.
 2. Initializes the per-VM UEFI NVRAM variable store (`~/.config/vm-stack/images/<name>_vars.fd`).
 3. Fetches a pinned, checksum-verified Win32-OpenSSH MSI and generates an unattended ISO containing `autounattend.xml`, the MSI, and `provision-windows.ps1`. The answer file supplies `LabConfig` bypasses, automatic partitioning, the requested local administrator, locale settings, and supported OOBE automation.
 4. Launches QEMU with:
-   - `-accel hvf`
+   - `-accel hvf` for same-architecture virtualization, or explicit
+     `-accel tcg` for cross-architecture emulation
    - `-device nvme,drive=hd0` (enables inbox Windows NVMe storage driver)
    - `-device usb-storage,drive=win_iso` (attaches Windows ISO as native USB media so WinPE never throws missing CD/DVD driver errors)
    - `-device usb-storage,drive=virtio_iso` (provides VirtIO network and balloon drivers with automated search paths)

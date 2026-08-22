@@ -9,7 +9,7 @@
 # 3. Authoritative VM allocation via manage-vms.sh
 # 4. UEFI firmware & per-VM NVRAM variable setup
 # 5. autounattend.xml ISO generation (TPM/SecureBoot bypass, local admin user, SSH)
-# 6. QEMU execution with native NVMe storage and HVF acceleration
+# 6. QEMU execution with native NVMe storage and HVF acceleration or opt-in TCG emulation
 # ==============================================================================
 
 set -euo pipefail
@@ -48,6 +48,10 @@ Provisions an automated Windows VM on macOS.
 
 ${BOLD}Options:${RESET}
   --iso <path>               Path to Windows ISO (if omitted, searches ~/.config/vm-stack/media/)
+  --arch <auto|aarch64|x86_64>
+                             Guest architecture [default: auto (host architecture)]
+  --accel <auto|hvf|tcg>     CPU execution backend [default: auto]
+                             Cross-architecture guests require explicit --accel tcg
   --size <size>              Virtual disk size [default: 64G]
   --memory <size>            RAM allocation [default: 8G]
   --cpus <n>                 CPU core count [default: 4]
@@ -77,6 +81,9 @@ DISPLAY_MODE="default"
 DRY_RUN=0
 READY_TIMEOUT=1800
 WAIT_FOR_READY=1
+TARGET_ARCH="auto"
+ACCEL="auto"
+READY_TIMEOUT_SET=0
 
 if [[ $# -eq 0 ]]; then
   show_help
@@ -90,6 +97,14 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --iso)
       ISO_PATH="$2"
+      shift 2
+      ;;
+    --arch)
+      TARGET_ARCH="$2"
+      shift 2
+      ;;
+    --accel)
+      ACCEL="$2"
       shift 2
       ;;
     --size)
@@ -126,6 +141,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ready-timeout)
       READY_TIMEOUT="$2"
+      READY_TIMEOUT_SET=1
       shift 2
       ;;
     --no-wait)
@@ -150,15 +166,47 @@ done
 
 # Architecture detection
 HOST_ARCH="$(uname -m 2>/dev/null || echo "arm64")"
-QEMU_ARCH="aarch64"
-QEMU_BIN="qemu-system-aarch64"
+case "$HOST_ARCH" in
+  arm64|aarch64) HOST_QEMU_ARCH="aarch64" ;;
+  x86_64|amd64) HOST_QEMU_ARCH="x86_64" ;;
+  *) log_error "Unsupported host architecture: $HOST_ARCH"; exit 1 ;;
+esac
 
-if [[ "$HOST_ARCH" = "x86_64" || "$HOST_ARCH" = "amd64" ]]; then
-  QEMU_ARCH="x86_64"
-  QEMU_BIN="qemu-system-x86_64"
+case "$TARGET_ARCH" in
+  auto) QEMU_ARCH="$HOST_QEMU_ARCH" ;;
+  arm64|aarch64) QEMU_ARCH="aarch64" ;;
+  amd64|x86_64) QEMU_ARCH="x86_64" ;;
+  *) log_error "--arch must be auto, aarch64, or x86_64"; exit 1 ;;
+esac
+
+case "$ACCEL" in
+  auto)
+    if [[ "$QEMU_ARCH" != "$HOST_QEMU_ARCH" ]]; then
+      log_error "Cross-architecture Windows requires explicit --accel tcg."
+      exit 1
+    fi
+    ACCEL="hvf"
+    ;;
+  hvf)
+    if [[ "$QEMU_ARCH" != "$HOST_QEMU_ARCH" ]]; then
+      log_error "HVF cannot execute a $QEMU_ARCH guest on a $HOST_QEMU_ARCH host; use --accel tcg."
+      exit 1
+    fi
+    ;;
+  tcg) ;;
+  *) log_error "--accel must be auto, hvf, or tcg"; exit 1 ;;
+esac
+
+if [[ "$ACCEL" = "tcg" && "$QEMU_ARCH" != "$HOST_QEMU_ARCH" ]]; then
+  log_warn "Using full-system $QEMU_ARCH CPU emulation on $HOST_QEMU_ARCH. Installation may take several hours."
+  if [[ "$READY_TIMEOUT_SET" -eq 0 ]]; then
+    READY_TIMEOUT=14400
+  fi
 fi
 
-log_info "Targeting host architecture: $HOST_ARCH ($QEMU_ARCH)"
+QEMU_BIN="qemu-system-${QEMU_ARCH}"
+command -v "$QEMU_BIN" >/dev/null 2>&1 || { log_error "Required emulator not found: $QEMU_BIN"; exit 1; }
+log_info "Host: $HOST_ARCH; guest: $QEMU_ARCH; accelerator: $ACCEL"
 
 # Locate firmware files
 EDK2_CODE=""
@@ -208,7 +256,7 @@ log_info "Using Windows Installation ISO: $ISO_PATH"
 
 # Ensure VirtIO drivers ISO is present
 VIRTIO_ISO="$MEDIA_DIR/virtio-win.iso"
-if [[ ! -f "$VIRTIO_ISO" ]]; then
+if [[ ! -f "$VIRTIO_ISO" && "$DRY_RUN" -eq 0 ]]; then
   log_info "VirtIO drivers not found in cache. Attempting download..."
   "$FETCH_MEDIA_SCRIPT" virtio-win 2>/dev/null || log_warn "Could not download virtio-win.iso (offline or unreachable). Continuing without it."
 fi
@@ -236,10 +284,10 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --memory "$MEMORY" \
       --cpus "$CPUS" \
       --os windows \
-      --accel hvf \
+      --accel "$ACCEL" \
       --ssh-port "$SSH_PORT" \
       --rdp-port "$RDP_PORT" \
-      --description "Automated Windows 11 ($QEMU_ARCH) VM"
+      --description "Automated Windows 11 ($QEMU_ARCH, $ACCEL) VM"
   fi
 fi
 
@@ -266,8 +314,8 @@ fi
 # 4. Assemble QEMU Command
 QEMU_CMD=(
   "$QEMU_BIN"
-  -accel hvf
-  -cpu host
+  -accel "$ACCEL"
+  -cpu "$([[ "$ACCEL" = "hvf" ]] && echo host || echo max)"
   -smp "$CPUS"
   -m "$MEMORY"
   -drive if=pflash,format=raw,readonly=on,file="$EDK2_CODE"

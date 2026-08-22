@@ -165,6 +165,7 @@ VM_SIZE="64G"
 ADMIN_USER="admin"
 ADMIN_PASS="admin"
 MEDIA_ISO=""
+WINDOWS_ACCEL="hvf"
 
 banner "vm-stack VM Creation Wizard"
 
@@ -210,6 +211,19 @@ case "$OS_SELECTION" in
     ;;
 esac
 
+if [[ "$OS_CHOICE" = "windows" && ( "$HOST_ARCH" = "arm64" || "$HOST_ARCH" = "aarch64" ) ]]; then
+  say "Choose how Windows should execute on Apple Silicon:"
+  printf '\n    1) Windows 11 ARM64 with HVF (fast)\n'
+  printf '    2) Windows 11 x86-64 with TCG (slow compatibility mode)\n\n'
+  ask WINDOWS_EXECUTION "Enter selection (1-2)" "1"
+  if [[ "$WINDOWS_EXECUTION" = "2" ]]; then
+    TARGET_ARCH="x86_64"
+    WINDOWS_ACCEL="tcg"
+    VM_NAME="win11-x64-tcg"
+    warn "x86-64 TCG installation may take several hours."
+  fi
+fi
+
 success "Selected: $OS_CHOICE ($TARGET_ARCH)"
 ACTIONS_PERFORMED+=("Selected OS: $OS_CHOICE ($TARGET_ARCH)")
 
@@ -222,13 +236,15 @@ if [[ "$OS_CHOICE" = "windows" ]]; then
     success "Found cached Windows ISO: $MEDIA_ISO"
   else
     warn "No Windows ISO found in $MEDIA_DIR."
-    say "To install Windows 11 on $HOST_ARCH:"
+    say "To install Windows 11 for a $TARGET_ARCH guest:"
     step "Download the official Windows 11 ($TARGET_ARCH) ISO from Microsoft."
     printf '\n'
     open_url "https://www.microsoft.com/en-us/software-download/windows11"
     printf '\n'
-    note "On the Microsoft page, select the Windows 11 ISO for $HOST_ARCH and download it."
-    ask MEDIA_ISO "Enter the path to your downloaded Windows ISO" "$HOME/Downloads/Win11_Arm64.iso"
+    note "On the Microsoft page, select the Windows 11 ISO for $TARGET_ARCH and download it."
+    DEFAULT_WINDOWS_ISO="$HOME/Downloads/Win11_Arm64.iso"
+    [[ "$TARGET_ARCH" = "x86_64" ]] && DEFAULT_WINDOWS_ISO="$HOME/Downloads/Win11_x64.iso"
+    ask MEDIA_ISO "Enter the path to your downloaded Windows ISO" "$DEFAULT_WINDOWS_ISO"
     while [[ ! -f "$MEDIA_ISO" ]]; do
       warn "File does not exist: $MEDIA_ISO"
       ask MEDIA_ISO "Please enter a valid path to the Windows ISO"
@@ -299,6 +315,8 @@ if confirm "Start VM provisioning and automated installation now?"; then
     finish
     exec "$CREATE_WIN_SCRIPT" "$VM_NAME" \
       --iso "$MEDIA_ISO" \
+      --arch "$TARGET_ARCH" \
+      --accel "$WINDOWS_ACCEL" \
       --size "$VM_SIZE" \
       --memory "$VM_RAM" \
       --cpus "$VM_CPUS" \

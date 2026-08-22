@@ -7,7 +7,16 @@ This reference explains the zero-touch automated unattended installation pipelin
 | Host Architecture | Guest OS Target | QEMU Binary | Acceleration | Firmware |
 | :--- | :--- | :--- | :--- | :--- |
 | **Apple Silicon (ARM64)** | Windows 11 ARM64 | `qemu-system-aarch64` | `-accel hvf` | `edk2-aarch64-code.fd` + `_vars.fd` |
+| **Apple Silicon (ARM64)** | Windows 11 x86_64 | `qemu-system-x86_64` | `-accel tcg` (explicit, slow) | `edk2-x86_64-code.fd` + `_vars.fd` |
 | **Intel / AMD (x86_64)** | Windows 11 x86_64 | `qemu-system-x86_64` | `-accel hvf` / `kvm` | `edk2-x86_64-code.fd` + `_vars.fd` |
+
+The cross-architecture row uses QEMU's Tiny Code Generator for full-system CPU
+emulation. HVF does not translate x86-64 instructions onto an ARM64 host. The
+creator therefore requires the caller to opt in with
+`--arch x86_64 --accel tcg`, emits a performance warning, and uses a four-hour
+default readiness timeout. The guest still executes x86-64 Windows and x86-64
+applications; the distinction is execution speed and accelerator, not guest
+architecture.
 
 ## 2. LabConfig Registry Bypasses
 
