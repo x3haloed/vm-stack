@@ -28,9 +28,14 @@ WORK_DIR="$(mktemp -d -t vm_stack_seal_XXXXXX)"
 REMOTE_SCRIPT='C:/ProgramData/vm-stack/prepare-windows-base.ps1'
 REMOTE_LICENSE='C:/ProgramData/vm-stack/base-license.json'
 LOCAL_LICENSE="$WORK_DIR/base-license.json"
+INSPECT_TIMEOUT=600
+GENERALIZE_TIMEOUT=600
+# Cross-architecture Windows Sysprep can spend hours generalizing under TCG.
+# This is a maximum wait only; native guests still proceed as soon as QEMU exits.
+SHUTDOWN_TIMEOUT=14400
 
 "$MANAGER" copy-to "$VM_NAME" "$SCRIPT_DIR/prepare-windows-base.ps1" "$REMOTE_SCRIPT" --user "$USERNAME" --password "$PASSWORD"
-"$MANAGER" exec "$VM_NAME" --user "$USERNAME" --password "$PASSWORD" -- \
+"$MANAGER" exec "$VM_NAME" --user "$USERNAME" --password "$PASSWORD" --timeout "$INSPECT_TIMEOUT" -- \
   "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\vm-stack\prepare-windows-base.ps1 -Username '$USERNAME' -Password '$PASSWORD' -InspectOnly"
 "$MANAGER" copy-from "$VM_NAME" "$REMOTE_LICENSE" "$LOCAL_LICENSE" --user "$USERNAME" --password "$PASSWORD"
 
@@ -45,18 +50,20 @@ then
 fi
 
 echo "[INFO] Generalizing '$VM_NAME'; the SSH session may close while Windows shuts down."
-"$MANAGER" exec "$VM_NAME" --user "$USERNAME" --password "$PASSWORD" --timeout 180 -- \
+"$MANAGER" exec "$VM_NAME" --user "$USERNAME" --password "$PASSWORD" --timeout "$GENERALIZE_TIMEOUT" -- \
   "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\vm-stack\prepare-windows-base.ps1 -Username '$USERNAME' -Password '$PASSWORD'" || true
 
-for _ in $(seq 1 180); do
-  if ! "$MANAGER" status "$VM_NAME" --json | /usr/bin/python3 -c 'import json,sys; raise SystemExit(0 if json.load(sys.stdin)["runtime"]["is_running"] else 1)'; then
-    args=("$VM_NAME" "$BASE_NAME" --license-json "$LOCAL_LICENSE")
-    [[ "$ALLOW_EXPIRING" -eq 1 ]] && args+=(--allow-expiring-base)
-    "$MANAGER" seal-base "${args[@]}"
-    exit 0
+for _ in $(seq 1 $((SHUTDOWN_TIMEOUT / 2))); do
+  if status_json="$("$MANAGER" status "$VM_NAME" --json)"; then
+    if printf '%s\n' "$status_json" | /usr/bin/python3 -c 'import json,sys; raise SystemExit(0 if not json.load(sys.stdin)["runtime"]["is_running"] else 1)'; then
+      args=("$VM_NAME" "$BASE_NAME" --license-json "$LOCAL_LICENSE")
+      [[ "$ALLOW_EXPIRING" -eq 1 ]] && args+=(--allow-expiring-base)
+      "$MANAGER" seal-base "${args[@]}"
+      exit 0
+    fi
   fi
   sleep 2
 done
 
-echo "[ERROR] Timed out waiting for Sysprep to shut down '$VM_NAME'." >&2
+echo "[ERROR] Timed out after ${SHUTDOWN_TIMEOUT}s waiting for Sysprep to shut down '$VM_NAME'." >&2
 exit 1

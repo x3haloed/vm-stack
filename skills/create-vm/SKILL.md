@@ -157,6 +157,7 @@ This single command executes the complete unattended pipeline:
    - `-device usb-storage,drive=unattend_iso` (provides the answer file, offline OpenSSH package, and the single guest provisioner)
    - Port forwarding: Host `2222` -> Guest `22` (SSH), Host `3389` -> Guest `3389` (RDP).
 5. Recovers a missed optical-boot prompt through the managed QMP console when needed, waits for a real SSH banner, and verifies `C:\ProgramData\vm-stack\provisioned` before reporting success. Use `--no-wait` only when the caller explicitly wants asynchronous creation.
+6. When run through the desktop wizard, offers an explicit post-provision choice to generalize the fresh VM with Sysprep and capture it as an immutable reusable base. The wizard warns that this removes machine-specific identity and shuts down the source VM; declining leaves the provisioned VM running normally.
 
 #### 4. Reusing a Sealed Windows Base
 
@@ -168,6 +169,8 @@ After one fully provisioned Windows VM has passed acceptance, generalize and cap
 ```
 
 The seal workflow records the edition, licensing channel/status, grace time, and expiration. Evaluation media is rejected unless `--allow-expiring-base` is explicit. It removes machine-specific SSH keys and readiness state, runs Sysprep, waits for Windows to shut down, and delegates immutable image capture to `manage-vms.sh seal-base`.
+
+The desktop creation wizard offers this workflow immediately after successful Windows readiness verification. Direct callers continue to invoke `seal-windows-base.sh` explicitly so creating a normal long-lived VM never generalizes it implicitly.
 
 Create subsequent VMs as thin overlays:
 

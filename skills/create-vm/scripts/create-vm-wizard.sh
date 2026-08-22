@@ -8,7 +8,7 @@
 # 1. Architecture & OS selection
 # 2. Media acquisition (including browser-assisted ISO download & path capture)
 # 3. Hardware sizing (vCPUs, RAM, Disk)
-# 4. Automated unattended installation launch
+# 4. Automated unattended installation and optional reusable-base sealing
 # ==============================================================================
 
 set -euo pipefail
@@ -18,6 +18,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 MANAGE_VMS_SCRIPT="$REPO_DIR/skills/manage-vms/scripts/manage-vms.sh"
 FETCH_MEDIA_SCRIPT="$SCRIPT_DIR/fetch-media.sh"
 CREATE_WIN_SCRIPT="$SCRIPT_DIR/create-windows-vm.sh"
+SEAL_WIN_SCRIPT="$SCRIPT_DIR/seal-windows-base.sh"
 LAUNCH_TERMINAL_SCRIPT="$SCRIPT_DIR/launch-terminal.sh"
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vm-stack"
@@ -96,6 +97,13 @@ confirm() {
   [[ -z "$reply" || "$reply" =~ ^[Yy] ]]
 }
 
+confirm_optional() {
+  local reply=""
+  printf '  %s? %s [y/N] %s' "$YELLOW" "$1" "$RESET"
+  read -r reply || true
+  [[ "$reply" =~ ^[Yy] ]]
+}
+
 ask() {
   local var_name="$1"
   local prompt="$2"
@@ -146,6 +154,10 @@ finish() {
     note "Connection Ports:"
     printf '  %s• SSH:%s localhost:2222 (user: %s, pass: %s)\n' "$BLUE" "$RESET" "$ADMIN_USER" "$ADMIN_PASS"
     printf '  %s• RDP:%s localhost:3389\n\n' "$BLUE" "$RESET"
+    if [[ -n "$SEALED_BASE_NAME" ]]; then
+      printf '  %sSealed Base:%s  %s\n' "$BOLD" "$RESET" "$SEALED_BASE_NAME"
+      printf '  %sBase Path:%s    %s\n\n' "$BOLD" "$RESET" "$CONFIG_DIR/templates/$SEALED_BASE_NAME.qcow2"
+    fi
   fi
 }
 
@@ -166,6 +178,7 @@ ADMIN_USER="admin"
 ADMIN_PASS="admin"
 MEDIA_ISO=""
 WINDOWS_ACCEL="hvf"
+SEALED_BASE_NAME=""
 
 banner "vm-stack VM Creation Wizard"
 
@@ -289,9 +302,7 @@ printf '    %sAllocations:%s %s vCPUs, %s RAM, %s Disk\n\n' "$BOLD" "$RESET" "$V
 if confirm "Start VM provisioning and automated installation now?"; then
   step "Launching installer session..."
   if [[ "$OS_CHOICE" = "windows" ]]; then
-    ACTIONS_PERFORMED+=("Launched automated Windows installation")
-    finish
-    exec "$CREATE_WIN_SCRIPT" "$VM_NAME" \
+    "$CREATE_WIN_SCRIPT" "$VM_NAME" \
       --iso "$MEDIA_ISO" \
       --arch "$TARGET_ARCH" \
       --accel "$WINDOWS_ACCEL" \
@@ -300,6 +311,26 @@ if confirm "Start VM provisioning and automated installation now?"; then
       --cpus "$VM_CPUS" \
       --username "$ADMIN_USER" \
       --password "$ADMIN_PASS"
+    ACTIONS_PERFORMED+=("Provisioned Windows VM '$VM_NAME'")
+
+    printf '\n'
+    success "Windows provisioning and managed-readiness verification completed."
+    if confirm_optional "Seal this fresh VM as a reusable thin-clone base?"; then
+      warn "Sealing runs Sysprep, removes machine-specific identity and SSH state, and shuts down the source VM."
+      ask SEALED_BASE_NAME "Reusable base name" "$VM_NAME-base"
+      if confirm "Generalize '$VM_NAME' and seal it as '$SEALED_BASE_NAME' now?"; then
+        "$SEAL_WIN_SCRIPT" "$VM_NAME" "$SEALED_BASE_NAME" \
+          --user "$ADMIN_USER" \
+          --password "$ADMIN_PASS"
+        ACTIONS_PERFORMED+=("Sealed reusable Windows base '$SEALED_BASE_NAME'")
+      else
+        SEALED_BASE_NAME=""
+        SKIPPED_ACTIONS+=("Reusable-base sealing cancelled")
+      fi
+    else
+      SKIPPED_ACTIONS+=("Reusable-base sealing postponed")
+    fi
+    finish
   else
     # Linux / Custom disk clone
     "$MANAGE_VMS_SCRIPT" create "$VM_NAME" \

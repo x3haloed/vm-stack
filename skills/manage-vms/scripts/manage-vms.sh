@@ -1749,7 +1749,10 @@ elif action in ["exec", "ssh"]:
                 full = ["sshpass", "-p", pwd] + cmd_list
             else:
                 full = cmd_list
-            return subprocess.run(full).returncode
+            try:
+                return subprocess.run(full, timeout=timeout_sec).returncode
+            except subprocess.TimeoutExpired:
+                return 124
         try:
             import pty, select
             child_pid, master = pty.fork()
@@ -1859,7 +1862,10 @@ elif action in ["copy-to", "copy-from"]:
                 full = ["sshpass", "-p", pwd] + cmd_list
             else:
                 full = cmd_list
-            return subprocess.run(full).returncode
+            try:
+                return subprocess.run(full, timeout=timeout_sec).returncode
+            except subprocess.TimeoutExpired:
+                return 124
         try:
             import pty, select
             child_pid, master = pty.fork()
