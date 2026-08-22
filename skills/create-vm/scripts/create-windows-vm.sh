@@ -301,13 +301,27 @@ fi
 # 3. Generate Unattended Setup ISO
 UNATTEND_ISO="$MEDIA_DIR/${VM_NAME}_unattend.iso"
 if [[ "$DRY_RUN" -eq 0 ]]; then
+  # Windows unattended setup rejects ComputerName values longer than 15
+  # characters. Keep short VM names readable and give truncated names a stable
+  # checksum suffix so similarly prefixed VMs do not collide on the network.
+  WINDOWS_HOSTNAME="$(printf '%s' "$VM_NAME" | tr '[:lower:]_' '[:upper:]-' | sed -E 's/[^A-Z0-9-]+/-/g; s/^-+//; s/-+$//')"
+  if [[ -z "$WINDOWS_HOSTNAME" ]]; then
+    WINDOWS_HOSTNAME="WINDOWS-VM"
+  elif [[ ! "$WINDOWS_HOSTNAME" =~ [A-Z] ]]; then
+    WINDOWS_HOSTNAME="W-$WINDOWS_HOSTNAME"
+  fi
+  if [[ ${#WINDOWS_HOSTNAME} -gt 15 ]]; then
+    HOSTNAME_CHECKSUM="$(printf '%s' "$VM_NAME" | cksum | awk '{printf "%04x", $1 % 65536}')"
+    WINDOWS_HOSTNAME="${WINDOWS_HOSTNAME:0:10}-${HOSTNAME_CHECKSUM}"
+  fi
+
   log_info "Generating unattended answer file ISO: $UNATTEND_ISO"
   "$GEN_UNATTEND_SCRIPT" \
     --output "$UNATTEND_ISO" \
     --arch "$([[ "$QEMU_ARCH" = "aarch64" ]] && echo "arm64" || echo "amd64")" \
     --username "$USERNAME" \
     --password "$PASSWORD" \
-    --hostname "WIN-${VM_NAME}" \
+    --hostname "$WINDOWS_HOSTNAME" \
     --openssh-msi "$OPENSSH_MSI"
 fi
 

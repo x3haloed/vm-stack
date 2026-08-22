@@ -107,6 +107,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Windows computer names are still constrained by the 15-character NetBIOS
+# limit during unattended setup. Fail before building install media instead of
+# letting Windows reject the answer file after its first reboot.
+if [[ ${#HOSTNAME} -gt 15 || ! "$HOSTNAME" =~ ^[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]$ || ! "$HOSTNAME" =~ [A-Za-z] ]]; then
+  log_error "Invalid Windows hostname '$HOSTNAME'. Use 2-15 letters, digits, or hyphens; include a letter and do not begin or end with a hyphen."
+  exit 2
+fi
+
 generate_xml_content() {
   cat << EOF
 <?xml version="1.0" encoding="utf-8"?>
