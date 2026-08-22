@@ -1,0 +1,34 @@
+{
+  "name": "vm-stack",
+  "version": "0.1.0+codex.20260822042710",
+  "description": "Provision, manage, and run commands in local virtual machines.",
+  "author": {
+    "name": "Chad Kirby",
+    "url": "https://github.com/x3haloed"
+  },
+  "repository": "https://github.com/x3haloed/vm-stack",
+  "keywords": [
+    "virtual-machines",
+    "qemu",
+    "windows",
+    "linux",
+    "automation"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "VM Stack",
+    "shortDescription": "Provision and operate local VMs from Codex.",
+    "longDescription": "Create, inspect, manage, and run isolated workloads in local Windows and Linux virtual machines.",
+    "developerName": "Chad Kirby",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Check whether my VM Stack environment is ready.",
+      "List and inspect my registered virtual machines.",
+      "Run this workload in an ephemeral Linux VM."
+    ]
+  }
+}
