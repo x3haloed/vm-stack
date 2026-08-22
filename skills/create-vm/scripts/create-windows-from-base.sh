@@ -23,7 +23,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-"$MANAGER" create-from-base "$BASE_NAME" "$VM_NAME" "${CREATE_ARGS[@]}"
+"$MANAGER" create-from-base "$BASE_NAME" "$VM_NAME" ${CREATE_ARGS[@]+"${CREATE_ARGS[@]}"}
 "$MANAGER" start "$VM_NAME" --daemon --display none
 "$MANAGER" wait-ready "$VM_NAME" --timeout 600
 "$MANAGER" exec "$VM_NAME" --user "$USERNAME" --password "$PASSWORD" -- \

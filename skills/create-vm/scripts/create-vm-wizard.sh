@@ -37,7 +37,7 @@ if [[ "${1:-}" = "--terminal" ]] || [[ ! -t 0 || ! -t 1 ]]; then
   for arg in "$@"; do
     [[ "$arg" != "--terminal" ]] && ARGS+=("$arg")
   done
-  exec "$LAUNCH_TERMINAL_SCRIPT" "$SCRIPT_PATH" "${ARGS[@]}"
+  exec "$LAUNCH_TERMINAL_SCRIPT" "$SCRIPT_PATH" ${ARGS[@]+"${ARGS[@]}"}
 fi
 
 # Terminal styling
@@ -128,7 +128,7 @@ open_url() {
 finish() {
   _clear
   printf '\n%s%s  ✓ VM Provisioning Wizard Complete%s\n\n' "$BOLD" "$GREEN" "$RESET"
-  if [[ ${#ACTIONS_PERFORMED[@]} -gt 0 ]]; then
+  if [[ -n "${ACTIONS_PERFORMED[*]-}" ]]; then
     note "Summary of actions:"
     for act in "${ACTIONS_PERFORMED[@]}"; do
       printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$act"

@@ -40,7 +40,7 @@ NAME="${1:-}"
 shift
 OS=""; ARCH="$(host_arch)"; SIZE=20G; MEMORY=2G; CPUS=2; SSH_PORT=2222
 USER_NAME=""; PUBLIC_KEY=""; PURPOSE=""; RELEASE_WHEN=""; GUI=0; RETAINED=0; START=1
-PACKAGES=()
+PACKAGES=(); PACKAGE_COUNT=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,7 +54,7 @@ while [[ $# -gt 0 ]]; do
     --ssh-key) PUBLIC_KEY="$2"; shift 2 ;;
     --purpose) PURPOSE="$2"; shift 2 ;;
     --release-when) RELEASE_WHEN="$2"; shift 2 ;;
-    --package) PACKAGES+=("$2"); shift 2 ;;
+    --package) PACKAGES+=("$2"); PACKAGE_COUNT=$((PACKAGE_COUNT + 1)); shift 2 ;;
     --gui) GUI=1; shift ;;
     --retained) RETAINED=1; shift ;;
     --no-start) START=0; shift ;;
@@ -70,9 +70,11 @@ case "$OS" in
 esac
 [[ -n "$PURPOSE" && -n "$RELEASE_WHEN" ]] || { echo "--purpose and --release-when are required" >&2; exit 1; }
 [[ "$USER_NAME" =~ ^[a-z_][a-z0-9_-]*$ ]] || { echo "Invalid Linux username: $USER_NAME" >&2; exit 1; }
-for package in "${PACKAGES[@]}"; do
-  [[ "$package" =~ ^[a-zA-Z0-9.+:-]+$ ]] || { echo "Invalid package name: $package" >&2; exit 1; }
-done
+if [[ "$PACKAGE_COUNT" -gt 0 ]]; then
+  for package in "${PACKAGES[@]}"; do
+    [[ "$package" =~ ^[a-zA-Z0-9.+:-]+$ ]] || { echo "Invalid package name: $package" >&2; exit 1; }
+  done
+fi
 
 mkdir -p "$IMAGES_DIR"
 KEY_PATH="$IMAGES_DIR/${NAME}_id_ed25519"
@@ -109,9 +111,11 @@ EOF
 {
   printf '#cloud-config\nusers:\n  - name: %s\n    groups: [sudo]\n    shell: /bin/bash\n    sudo: ALL=(ALL) NOPASSWD:ALL\n    ssh_authorized_keys:\n      - %s\n' "$USER_NAME" "$AUTHORIZED_KEY"
   printf 'ssh_pwauth: false\ndisable_root: true\npackage_update: true\n'
-  if [[ ${#PACKAGES[@]} -gt 0 || "$GUI" -eq 1 ]]; then
+  if [[ "$PACKAGE_COUNT" -gt 0 || "$GUI" -eq 1 ]]; then
     printf 'packages:\n'
-    for package in "${PACKAGES[@]}"; do printf '  - %s\n' "$package"; done
+    if [[ "$PACKAGE_COUNT" -gt 0 ]]; then
+      for package in "${PACKAGES[@]}"; do printf '  - %s\n' "$package"; done
+    fi
     if [[ "$GUI" -eq 1 ]]; then
       [[ "$OS" = ubuntu ]] && printf '  - ubuntu-desktop-minimal\n' || printf '  - task-gnome-desktop\n'
     fi
@@ -139,7 +143,8 @@ EXTRA_ARGS="-drive file=${SEED_ISO},format=raw,if=virtio,readonly=on"
 if ! "$MANAGER" create "$NAME" --size "$SIZE" --backing-file "$MEDIA" --arch "$ARCH" \
   --memory "$MEMORY" --cpus "$CPUS" --os "$OS" --ssh-port "$SSH_PORT" \
   --description "$PURPOSE" --purpose "$PURPOSE" --release-when "$RELEASE_WHEN" \
-  --extra-args "$EXTRA_ARGS" --auxiliary-file "$SEED_ISO" "${KEY_ARGS[@]}" "${RETAIN_ARGS[@]}"; then
+  --extra-args "$EXTRA_ARGS" --auxiliary-file "$SEED_ISO" \
+  ${KEY_ARGS[@]+"${KEY_ARGS[@]}"} ${RETAIN_ARGS[@]+"${RETAIN_ARGS[@]}"}; then
   rm -f "$SEED_ISO"
   [[ -z "$PUBLIC_KEY" ]] && rm -f "$KEY_PATH" "$KEY_PATH.pub"
   exit 1

@@ -461,7 +461,7 @@ confirm() {
 finish() {
   _clear
   printf '\n%s%s  ✓ Sanity Check & Setup Complete%s\n\n' "$BOLD" "$GREEN" "$RESET"
-  if [[ ${#ACTIONS_PERFORMED[@]} -gt 0 ]]; then
+  if [[ -n "${ACTIONS_PERFORMED[*]-}" ]]; then
     note "Actions completed:"
     for act in "${ACTIONS_PERFORMED[@]}"; do
       printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$act"
@@ -469,7 +469,7 @@ finish() {
     printf '\n'
   fi
 
-  if [[ ${#SKIPPED_ACTIONS[@]} -gt 0 ]]; then
+  if [[ -n "${SKIPPED_ACTIONS[*]-}" ]]; then
     warn "Actions skipped or requiring manual follow-up:"
     for sk in "${SKIPPED_ACTIONS[@]}"; do
       printf '  %s-%s %s\n' "$YELLOW" "$RESET" "$sk"
