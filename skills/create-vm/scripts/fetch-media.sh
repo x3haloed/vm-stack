@@ -184,9 +184,13 @@ find_windows_iso() {
   local found=""
   local candidates
   if [[ "$arch" = "aarch64" ]]; then
-    candidates=$(find "$MEDIA_DIR" -maxdepth 2 -type f \( -iname "*win*11*arm*.iso" -o -iname "*win*arm64*.iso" -o -iname "*24H2*arm*.iso" -o -iname "*windows*.iso" \) 2>/dev/null || true)
+    candidates=$(find -L "$MEDIA_DIR" -maxdepth 2 -type f \
+      ! -iname "*_unattend.iso" ! -iname "unattend.iso" ! -iname "virtio-win.iso" \
+      \( -iname "*win*11*arm*.iso" -o -iname "*win*arm64*.iso" -o -iname "*24H2*arm*.iso" -o -iname "*windows*.iso" \) 2>/dev/null || true)
   else
-    candidates=$(find "$MEDIA_DIR" -maxdepth 2 -type f \( -iname "*win*11*x64*.iso" -o -iname "*win*10*x64*.iso" -o -iname "*windows*64*.iso" -o -iname "*windows*.iso" \) 2>/dev/null || true)
+    candidates=$(find -L "$MEDIA_DIR" -maxdepth 2 -type f \
+      ! -iname "*_unattend.iso" ! -iname "unattend.iso" ! -iname "virtio-win.iso" \
+      \( -iname "*win*11*x64*.iso" -o -iname "*win*10*x64*.iso" -o -iname "*windows*64*.iso" -o -iname "*windows*.iso" \) 2>/dev/null || true)
   fi
 
   if [[ -n "$candidates" ]]; then
@@ -230,8 +234,8 @@ case "$CMD" in
     ;;
   find-windows|check-windows)
     if iso_path="$(find_windows_iso "$@")"; then
-      log_info "Found Windows ISO: $iso_path"
-      echo "$iso_path"
+      log_info "Found Windows ISO: $iso_path" >&2
+      printf '%s\n' "$iso_path"
       exit 0
     else
       log_warn "No Windows ISO matching architecture found in $MEDIA_DIR."
