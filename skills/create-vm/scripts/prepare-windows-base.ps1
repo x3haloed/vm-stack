@@ -9,6 +9,8 @@ $stateDirectory = Join-Path $env:ProgramData 'vm-stack'
 $metadataPath = Join-Path $stateDirectory 'base-license.json'
 $firstBootPath = Join-Path $stateDirectory 'first-boot.ps1'
 $unattendPath = Join-Path $stateDirectory 'clone-unattend.xml'
+$generalizePath = Join-Path $stateDirectory 'generalize-base.ps1'
+$sealTaskName = 'vm-stack-seal'
 
 $license = Get-CimInstance SoftwareLicensingProduct |
     Where-Object { $_.Name -like 'Windows*' -and $_.PartialProductKey } |
@@ -48,6 +50,8 @@ New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlo
 Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -Name DefaultPassword -ErrorAction SilentlyContinue
 Set-Content -LiteralPath (Join-Path $stateDirectory 'provisioned') -Value 'ok' -Encoding ascii
 Start-Service sshd
+Unregister-ScheduledTask -TaskName 'vm-stack-seal' -Confirm:$false -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $stateDirectory 'generalize-base.ps1') -Force -ErrorAction SilentlyContinue
 '@ | Set-Content -LiteralPath $firstBootPath -Encoding UTF8
 
 $escapedUsername = [Security.SecurityElement]::Escape($Username)
@@ -83,14 +87,25 @@ $xml = @"
 "@
 $xml | Set-Content -LiteralPath $unattendPath -Encoding UTF8
 
+@"
+`$ErrorActionPreference = 'Stop'
 Stop-Service sshd -Force
 Set-Service -Name sshd -StartupType Disabled
 Remove-Item -Path (Join-Path $env:ProgramData 'ssh\ssh_host_*') -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $stateDirectory 'provisioned') -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath (Join-Path $stateDirectory 'provision.log') -Force -ErrorAction SilentlyContinue
 
-$sysprep = Join-Path $env:WINDIR 'System32\Sysprep\Sysprep.exe'
-$sysprepProcess = Start-Process -FilePath $sysprep -ArgumentList @('/generalize', '/oobe', '/shutdown', '/mode:vm', "/unattend:$unattendPath") -Wait -PassThru
-if ($sysprepProcess.ExitCode -ne 0) {
-    throw "Sysprep failed with exit code $($sysprepProcess.ExitCode). See C:\Windows\System32\Sysprep\Panther for details."
+`$sysprep = Join-Path `$env:WINDIR 'System32\Sysprep\Sysprep.exe'
+`$sysprepProcess = Start-Process -FilePath `$sysprep -ArgumentList @('/generalize', '/oobe', '/shutdown', '/mode:vm', '/unattend:$unattendPath') -Wait -PassThru
+if (`$sysprepProcess.ExitCode -ne 0) {
+    throw "Sysprep failed with exit code `$(`$sysprepProcess.ExitCode). See C:\Windows\System32\Sysprep\Panther for details."
 }
+"@ | Set-Content -LiteralPath $generalizePath -Encoding UTF8
+
+# Stopping sshd from the SSH-owned PowerShell process also tears down that
+# process tree on Windows. Run generalization as SYSTEM in Task Scheduler so
+# Sysprep survives the intentional SSH shutdown.
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$generalizePath`""
+$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskName $sealTaskName -Action $action -Principal $principal -Force | Out-Null
+Start-ScheduledTask -TaskName $sealTaskName

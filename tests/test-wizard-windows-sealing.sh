@@ -5,6 +5,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WIZARD="$REPO_ROOT/skills/create-vm/scripts/create-vm-wizard.sh"
 SEALER="$REPO_ROOT/skills/create-vm/scripts/seal-windows-base.sh"
+PREPARER="$REPO_ROOT/skills/create-vm/scripts/prepare-windows-base.ps1"
 
 bash -n "$WIZARD" "$SEALER"
 
@@ -27,5 +28,8 @@ grep -Fq 'GENERALIZE_TIMEOUT=600' "$SEALER"
 grep -Fq 'SHUTDOWN_TIMEOUT=14400' "$SEALER"
 grep -Fq 'status_json="$("$MANAGER" status "$VM_NAME" --json)"' "$SEALER"
 grep -Fq '0 if not json.load(sys.stdin)["runtime"]["is_running"] else 1' "$SEALER"
+grep -Fq "Register-ScheduledTask -TaskName \$sealTaskName" "$PREPARER"
+grep -Fq "Start-ScheduledTask -TaskName \$sealTaskName" "$PREPARER"
+grep -Fq "Unregister-ScheduledTask -TaskName 'vm-stack-seal'" "$PREPARER"
 
 echo "Wizard post-provision sealing flow checks passed."
