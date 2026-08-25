@@ -168,7 +168,7 @@ After one fully provisioned Windows VM has passed acceptance, generalize and cap
   --user admin --password admin
 ```
 
-The seal workflow records the edition, licensing channel/status, grace time, and expiration. Evaluation media is rejected unless `--allow-expiring-base` is explicit. It removes machine-specific SSH keys and readiness state, runs Sysprep, waits for Windows to shut down, and delegates immutable image capture to `manage-vms.sh seal-base`.
+The seal workflow records the edition, licensing channel/status, grace time, and expiration. Evaluation media is rejected unless `--allow-expiring-base` is explicit. It removes machine-specific SSH keys and readiness state, runs Sysprep, waits for Windows to shut down, and delegates immutable image capture to `manage-vms.sh seal-base`. A clone reuses the preserved local administrator, performs one automatic logon, and publishes readiness only from its first-logon provisioner after the interactive desktop path has completed; it does not recreate the existing account during OOBE.
 
 The desktop creation wizard offers this workflow immediately after successful Windows readiness verification. Direct callers continue to invoke `seal-windows-base.sh` explicitly so creating a normal long-lived VM never generalizes it implicitly.
 

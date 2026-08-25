@@ -70,7 +70,6 @@ $xml = @"
     <component name="Microsoft-Windows-Deployment" processorArchitecture="$processorArchitecture" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/StateMachine">
       <RunSynchronous>
         <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
-        <RunSynchronousCommand wcm:action="add"><Order>2</Order><Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\vm-stack\first-boot.ps1</Path></RunSynchronousCommand>
       </RunSynchronous>
     </component>
   </settings>
@@ -80,7 +79,8 @@ $xml = @"
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$processorArchitecture" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/StateMachine">
       <OOBE><HideEULAPage>true</HideEULAPage><HideOnlineAccountScreens>true</HideOnlineAccountScreens><HideLocalAccountScreen>true</HideLocalAccountScreen><HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE><NetworkLocation>Work</NetworkLocation><ProtectYourPC>3</ProtectYourPC></OOBE>
-      <UserAccounts><AdministratorPassword><Value>$escapedPassword</Value><PlainText>true</PlainText></AdministratorPassword><LocalAccounts><LocalAccount wcm:action="add"><Description>vm-stack administrator</Description><DisplayName>$escapedUsername</DisplayName><Group>Administrators</Group><Name>$escapedUsername</Name><Password><Value>$escapedPassword</Value><PlainText>true</PlainText></Password></LocalAccount></LocalAccounts></UserAccounts>
+      <AutoLogon><Password><Value>$escapedPassword</Value><PlainText>true</PlainText></Password><Enabled>true</Enabled><LogonCount>1</LogonCount><Username>$escapedUsername</Username></AutoLogon>
+      <FirstLogonCommands><SynchronousCommand wcm:action="add"><Order>1</Order><CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ProgramData\vm-stack\first-boot.ps1</CommandLine><Description>Complete vm-stack clone provisioning</Description></SynchronousCommand></FirstLogonCommands>
     </component>
   </settings>
 </unattend>
