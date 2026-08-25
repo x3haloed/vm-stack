@@ -185,6 +185,11 @@ Purpose and release condition are required. Clones are disposable unless `--reta
 
 The clone receives private writable disk and firmware state. Windows specializes a fresh machine identity, generates new SSH host keys, writes the readiness marker, and exposes SSH. The host then retries activation after networking is usable, persists the output in `C:\ProgramData\vm-stack\activation.log`, and reports the resulting state. Activation failure does not make an otherwise functional test VM unready, but it must remain visible to the caller. An inherited activation state is neither guaranteed to activate another virtual device nor authorization to run more Windows instances; licensing remains the operator's responsibility.
 
+Clone readiness waits up to ten minutes under hardware acceleration and four
+hours under TCG. The longer TCG bound covers the same full-system emulation cost
+as installation and sealing; an active specialization screen is not treated as
+a failed clone merely because it crosses the accelerated-path timeout.
+
 ---
 
 ### B. Linux VM Provisioning (Ubuntu / Debian / Cloud-Init)

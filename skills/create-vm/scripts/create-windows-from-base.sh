@@ -25,7 +25,12 @@ done
 
 "$MANAGER" create-from-base "$BASE_NAME" "$VM_NAME" ${CREATE_ARGS[@]+"${CREATE_ARGS[@]}"}
 "$MANAGER" start "$VM_NAME" --daemon --display none
-"$MANAGER" wait-ready "$VM_NAME" --timeout 600
+READY_TIMEOUT=600
+if [[ "$("$MANAGER" inspect "$VM_NAME" --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["accel"])')" == "tcg" ]]; then
+  READY_TIMEOUT=14400
+  echo "[WARN] TCG Windows clone specialization may take several hours."
+fi
+"$MANAGER" wait-ready "$VM_NAME" --timeout "$READY_TIMEOUT"
 "$MANAGER" exec "$VM_NAME" --user "$USERNAME" --password "$PASSWORD" -- \
   "if ((Get-Content -LiteralPath 'C:\ProgramData\vm-stack\provisioned' -ErrorAction SilentlyContinue) -ne 'ok') { exit 1 }"
 
